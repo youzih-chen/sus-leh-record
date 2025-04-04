@@ -47,6 +47,8 @@ class LEHRecordProgram:
         self.initial_leh_fields = self.LABELS[19:25]
         self.leh_count_type = self.LABELS[25:27]
         self.other_fields = self.LABELS[27:]
+        self.left_other_fields = ["Notes", "Pathology"]
+        self.right_other_fields = ["Photo ID (Buccal)", "Photo ID (Lingual)", "Photo ID (Occlusal)"]
 
     def setup_variables(self):
         """初始化變數"""
@@ -294,30 +296,40 @@ class LEHRecordProgram:
         self.entries[f"{unique_label}1"].focus_set()
 
     def create_other_section(self):
-        """創建其他資訊區域"""
+        """創建其他資訊區域，分為左右兩部分"""
         other_frame = ttk.LabelFrame(self.inner_frame, text="Other Information", padding=10)
         other_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
-        for i, field in enumerate(self.other_fields):
-            tk.Label(other_frame, text=field, font=self.FONT_CONFIG).grid(row=i, column=0, padx=5, pady=2, sticky="ne")
-            if field in ["Notes", "Pathology"]:
-                text_frame = tk.Frame(other_frame)
-                text_frame.grid(row=i, column=1, padx=5, pady=2, sticky="w")
-                text_widget = tk.Text(text_frame, width=40, height=5, font=self.FONT_CONFIG)
-                text_widget.pack(side="left", fill="y")
-                scrollbar = tk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
-                scrollbar.pack(side="right", fill="y")
-                text_widget.configure(yscrollcommand=scrollbar.set)
-                def handle_tab(event, next_field_idx=i+1):
-                    if next_field_idx < len(self.other_fields):
-                        next_field = self.other_fields[next_field_idx]
-                        self.entries[next_field].focus_set()
-                    return "break"
-                text_widget.bind("<Tab>", handle_tab)
-                self.entries[field] = text_widget
-            else:
-                entry = tk.Entry(other_frame, width=30, font=self.FONT_CONFIG)
-                entry.grid(row=i, column=1, padx=5, pady=2, sticky="w")
-                self.entries[field] = entry
+
+        # 左邊框架：Notes 和 Pathology
+        left_other_frame = tk.Frame(other_frame)
+        left_other_frame.pack(side="left", padx=5, pady=5)
+        for i, field in enumerate(self.left_other_fields):
+            tk.Label(left_other_frame, text=field, font=self.FONT_CONFIG).grid(row=i, column=0, padx=5, pady=2, sticky="ne")
+            text_frame = tk.Frame(left_other_frame)
+            text_frame.grid(row=i, column=1, padx=5, pady=2, sticky="w")
+            text_widget = tk.Text(text_frame, width=40, height=5, font=self.FONT_CONFIG)
+            text_widget.pack(side="left", fill="y")
+            scrollbar = tk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
+            scrollbar.pack(side="right", fill="y")
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            def handle_tab(event, next_field_idx=i+1):
+                if next_field_idx < len(self.left_other_fields):
+                    next_field = self.left_other_fields[next_field_idx]
+                    self.entries[next_field].focus_set()
+                elif next_field_idx == len(self.left_other_fields):
+                    self.entries[self.right_other_fields[0]].focus_set()
+                return "break"
+            text_widget.bind("<Tab>", handle_tab)
+            self.entries[field] = text_widget
+
+        # 右邊框架：Photo ID 欄位
+        right_other_frame = tk.Frame(other_frame)
+        right_other_frame.pack(side="left", padx=5, pady=5)
+        for i, field in enumerate(self.right_other_fields):
+            tk.Label(right_other_frame, text=field, font=self.FONT_CONFIG).grid(row=i, column=0, padx=5, pady=2, sticky="e")
+            entry = tk.Entry(right_other_frame, width=30, font=self.FONT_CONFIG)
+            entry.grid(row=i, column=1, padx=5, pady=2, sticky="w")
+            self.entries[field] = entry
 
     def setup_navigation(self, widgets):
         """設置tab順序和方向鍵導航"""
@@ -579,7 +591,7 @@ class LEHRecordProgram:
                 self.entries[f"{field} Photo ID"].delete(0, tk.END)
             if field in self.averages:
                 self.averages[field].config(text="N/A")
-        for field in self.other_fields:
+        for field in self.left_other_fields:  # 只清空左側其他資訊
             if isinstance(self.entries[field], tk.Text):
                 self.entries[field].delete("1.0", tk.END)
             else:
@@ -703,17 +715,21 @@ class LEHRecordProgram:
             self.show_record()
 
     def next_record(self):
-        """顯示下一筆記錄（僅保留基本資訊，清空測量值、LEH 和其他資訊）"""
+        """顯示下一筆記錄（保留基本資訊和 Photo ID，清空測量值、LEH 和左側其他資訊）"""
         data = self.collect_data()
         if data:
             self.save_data(data, self.current_record_index >= 0)  # 儲存到內部記錄
         
-        # 儲存基本資訊
-        saved_data = {field: self.entries[field].get() for field in self.basic_fields}
+        # 儲存基本資訊和 Photo ID
+        saved_basic_data = {field: self.entries[field].get() for field in self.basic_fields}
+        saved_photo_data = {field: self.entries[field].get() for field in self.right_other_fields}
         # 清空所有欄位
         self.clear_entries()
-        # 恢復基本資訊
-        for field, value in saved_data.items():
+        # 恢復基本資訊和 Photo ID
+        for field, value in saved_basic_data.items():
+            self.entries[field].delete(0, tk.END)
+            self.entries[field].insert(0, value)
+        for field, value in saved_photo_data.items():
             self.entries[field].delete(0, tk.END)
             self.entries[field].insert(0, value)
         # 重設 LEH 欄位
