@@ -703,23 +703,21 @@ class LEHRecordProgram:
             self.show_record()
 
     def next_record(self):
-        """顯示下一筆記錄（保留基本資訊和測量值，僅清空LEH）"""
+        """顯示下一筆記錄（僅保留基本資訊，清空測量值、LEH 和其他資訊）"""
         data = self.collect_data()
         if data:
             self.save_data(data, self.current_record_index >= 0)  # 儲存到內部記錄
         
+        # 儲存基本資訊
         saved_data = {field: self.entries[field].get() for field in self.basic_fields}
-        saved_measurements = {f"{field}{i}": self.entries[f"{field}{i}"].get() 
-                              for field in self.measurement_fields for i in ["1", "2", "3"]}
-        self.clear_leh_entries()
-        self.reset_leh_fields()
+        # 清空所有欄位
+        self.clear_entries()
+        # 恢復基本資訊
         for field, value in saved_data.items():
             self.entries[field].delete(0, tk.END)
             self.entries[field].insert(0, value)
-        for key, value in saved_measurements.items():
-            self.entries[key].delete(0, tk.END)
-            self.entries[key].insert(0, value)
-            self.calculate_avg(key[:-1])
+        # 重設 LEH 欄位
+        self.reset_leh_fields()
         self.current_record_index = -1
         self.status_label.config(text="Ready for next record (same context)")
 
