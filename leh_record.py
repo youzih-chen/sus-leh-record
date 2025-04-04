@@ -24,7 +24,6 @@ class LEHRecordProgram:
         atexit.register(self.cleanup_cache)
 
     def setup_constants(self):
-        """設置常數"""
         self.FONT_CONFIG = ("Calibri", 11)
         self.LABELS = [
             "Sample ID", "Context", "Sample Type", "Sample Side", 
@@ -38,34 +37,33 @@ class LEHRecordProgram:
             "Lingual Peak c LEH Height (Lc)", 
             "Buccal Peak a LEH Height (Ba)", "Buccal Peak b LEH Height (Bb)", 
             "Buccal Peak c LEH Height (Bc)", 
-            "LEH Count", "LEH Type", "Notes", "Pathology", 
-            "Photo ID (Buccal)", "Photo ID (Lingual)", "Photo ID (Occlusal)"
+            "LEH Count", "LEH Type", "Notes", "Pathology"
         ]
-        
         self.basic_fields = self.LABELS[:9]
         self.measurement_fields = self.LABELS[9:19]
         self.initial_leh_fields = self.LABELS[19:25]
         self.leh_count_type = self.LABELS[25:27]
         self.other_fields = self.LABELS[27:]
-        self.left_other_fields = ["Notes", "Pathology"]
-        self.right_other_fields = ["Photo ID (Buccal)", "Photo ID (Lingual)", "Photo ID (Occlusal)"]
+        self.fixed_photo_types = ["Buccal", "Lingual", "Occlusal"]
 
     def setup_variables(self):
-        """初始化變數"""
         self.entries = {}
         self.averages = {}
-        self.records = []  # 儲存所有記錄的內部列表
-        self.all_data = []  # 用於最終寫入 CSV
+        self.records = []
+        self.all_data = []
         self.current_file = None
         self.data_dir = None
         self.additional_leh_fields = []
+        self.additional_photo_fields = []
+        self.all_photo_fields = self.fixed_photo_types.copy()
         self.row_map = {}
+        self.photo_row_map = {}
         self.current_record_index = -1
         self.all_leh_fields = self.initial_leh_fields.copy()
         self.context_fields = []
+        self.record_number = 0
 
     def setup_cache(self):
-        """設置快取機制"""
         self.cache_file = os.path.join(tempfile.gettempdir(), 'leh_record_cache.pkl')
         self.record_cache = {}
         if os.path.exists(self.cache_file):
@@ -75,21 +73,23 @@ class LEHRecordProgram:
             except:
                 self.record_cache = {}
 
-    def save_to_cache(self, record_num, data):
-        """保存數據到快取"""
-        self.record_cache[record_num] = data
+    def save_to_cache(self, record_num, entries):
+        cache_data = {}
+        for key, widget in entries.items():
+            if widget.winfo_exists():
+                if isinstance(widget, tk.Text):
+                    cache_data[key] = widget.get("1.0", tk.END).strip()
+                else:
+                    cache_data[key] = widget.get()
+        self.record_cache[record_num] = cache_data
         try:
             with open(self.cache_file, 'wb') as f:
                 pickle.dump(self.record_cache, f)
+            print(f"Cached record {record_num}")
         except Exception as e:
             print(f"快取保存失敗: {e}")
 
-    def get_from_cache(self, record_num):
-        """從快取獲取數據"""
-        return self.record_cache.get(record_num)
-
     def cleanup_cache(self):
-        """清理快取文件"""
         try:
             if os.path.exists(self.cache_file):
                 os.remove(self.cache_file)
@@ -97,14 +97,12 @@ class LEHRecordProgram:
             pass
 
     def create_main_window(self):
-        """創建主視窗"""
         self.root = tk.Tk()
         self.root.title("LEH Record Program")
         self.root.geometry("1400x800")
         self.root.resizable(True, True)
 
     def setup_file_location(self):
-        """選擇檔案儲存位置或開啟舊檔"""
         file_window = tk.Toplevel(self.root)
         file_window.title("Setup File Location")
         file_window.geometry("400x200")
@@ -137,7 +135,6 @@ class LEHRecordProgram:
         file_window.wait_window()
 
     def setup_context_fields(self):
-        """設定 Context 相關欄位"""
         if not self.context_fields:
             context_window = tk.Toplevel(self.root)
             context_window.title("Set Context Fields")
@@ -162,7 +159,6 @@ class LEHRecordProgram:
             context_window.wait_window()
 
     def create_frames(self):
-        """創建主要框架"""
         self.outer_frame = tk.Frame(self.root)
         self.outer_frame.pack(fill="both", expand=True)
         self.create_record_frame()
@@ -173,7 +169,6 @@ class LEHRecordProgram:
         self.status_label.pack(side="bottom", pady=5)
 
     def create_record_frame(self):
-        """創建左側記錄框架"""
         self.record_frame = ttk.LabelFrame(self.outer_frame, text="Previous Records", padding=10)
         self.record_frame.pack(side="left", fill="y", padx=10, pady=10)
         self.record_canvas = tk.Canvas(self.record_frame, width=200)
@@ -190,7 +185,6 @@ class LEHRecordProgram:
         self.tree.bind("<Double-1>", self.show_record)
 
     def create_main_frame(self):
-        """創建主框架"""
         self.main_frame = tk.Frame(self.outer_frame)
         self.main_frame.pack(side="left", fill="both", expand=True)
         self.canvas = tk.Canvas(self.main_frame)
@@ -202,16 +196,17 @@ class LEHRecordProgram:
         self.canvas.create_window((0, 0), window=self.inner_frame, anchor="nw")
 
     def create_sections(self):
-        """創建各個區段"""
         self.top_frame = tk.Frame(self.inner_frame)
         self.top_frame.grid(row=0, column=0, sticky="ew")
         self.create_basic_section()
         self.create_measurement_section()
         self.create_leh_section()
+        self.other_photo_frame = tk.Frame(self.inner_frame)
+        self.other_photo_frame.grid(row=2, column=0, sticky="ew")
         self.create_other_section()
+        self.create_photo_section()
 
     def create_basic_section(self):
-        """創建基本資訊區域"""
         basic_frame = ttk.LabelFrame(self.top_frame, text="Basic Information", padding=10)
         basic_frame.pack(side="left", fill="y", padx=10, pady=10)
         for i, field in enumerate(self.basic_fields):
@@ -221,7 +216,6 @@ class LEHRecordProgram:
             self.entries[field] = entry
 
     def create_measurement_section(self):
-        """創建測量區域"""
         measurement_frame = ttk.LabelFrame(self.top_frame, text="Measurements", padding=10)
         measurement_frame.pack(side="left", fill="y", padx=10, pady=10)
         for i, field in enumerate(self.measurement_fields):
@@ -237,7 +231,6 @@ class LEHRecordProgram:
             self.averages[field] = avg_label
 
     def create_leh_section(self):
-        """創建LEH記錄區域"""
         self.leh_frame = ttk.LabelFrame(self.inner_frame, text="LEH Records", padding=10)
         self.leh_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
         headers = ["LEH Count", "LEH Type", "CEJ Visible", "Photo ID"]
@@ -247,7 +240,6 @@ class LEHRecordProgram:
             self.add_leh_field(field, i)
 
     def add_leh_field(self, label, row, suffix=""):
-        """添加單個LEH欄位行"""
         unique_label = f"{label}_{suffix}" if suffix else label
         short_label = self.get_short_label(label)
         tk.Label(self.leh_frame, text=short_label, font=self.FONT_CONFIG).grid(row=row, column=0, padx=5, pady=2, sticky="e")
@@ -277,35 +269,31 @@ class LEHRecordProgram:
         add_button.grid(row=row, column=9, padx=2, pady=2)
         all_widgets = entries + [count_entry, type_entry, cej_entry, photo_entry, add_button]
         self.setup_navigation(all_widgets)
+        self.row_map[unique_label] = row
 
     def add_new_leh_field(self, label, row):
-        """添加新的 LEH 欄位行"""
         suffix = str(len([f for f in self.additional_leh_fields if f.startswith(label)]) + 1)
         unique_label = f"{label}_{suffix}"
         self.additional_leh_fields.append(unique_label)
         self.all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
-        insert_row = row + 1
+        insert_row = self.row_map[label] + 1
         for field in sorted(self.row_map.keys(), key=lambda x: self.row_map[x], reverse=True):
-            if self.row_map[field] >= insert_row:
-                for widget in self.leh_frame.grid_slaves(row=self.row_map[field]):
-                    widget.grid(row=self.row_map[field] + 1)
-                self.row_map[field] += 1
+            current_row = self.row_map[field]
+            if current_row >= insert_row:
+                for widget in self.leh_frame.grid_slaves(row=current_row):
+                    widget.grid(row=current_row + 1)
+                self.row_map[field] = current_row + 1
         self.add_leh_field(label, insert_row, suffix)
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.entries[f"{unique_label}1"].focus_set()
 
     def create_other_section(self):
-        """創建其他資訊區域，分為左右兩部分"""
-        other_frame = ttk.LabelFrame(self.inner_frame, text="Other Information", padding=10)
-        other_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
-
-        # 左邊框架：Notes 和 Pathology
-        left_other_frame = tk.Frame(other_frame)
-        left_other_frame.pack(side="left", padx=5, pady=5)
-        for i, field in enumerate(self.left_other_fields):
-            tk.Label(left_other_frame, text=field, font=self.FONT_CONFIG).grid(row=i, column=0, padx=5, pady=2, sticky="ne")
-            text_frame = tk.Frame(left_other_frame)
+        self.other_frame = ttk.LabelFrame(self.other_photo_frame, text="Other Information", padding=10)
+        self.other_frame.pack(side="left", fill="y", padx=10, pady=10)
+        for i, field in enumerate(self.other_fields):
+            tk.Label(self.other_frame, text=field, font=self.FONT_CONFIG).grid(row=i, column=0, padx=5, pady=2, sticky="ne")
+            text_frame = tk.Frame(self.other_frame)
             text_frame.grid(row=i, column=1, padx=5, pady=2, sticky="w")
             text_widget = tk.Text(text_frame, width=40, height=5, font=self.FONT_CONFIG)
             text_widget.pack(side="left", fill="y")
@@ -313,26 +301,59 @@ class LEHRecordProgram:
             scrollbar.pack(side="right", fill="y")
             text_widget.configure(yscrollcommand=scrollbar.set)
             def handle_tab(event, next_field_idx=i+1):
-                if next_field_idx < len(self.left_other_fields):
-                    next_field = self.left_other_fields[next_field_idx]
+                if next_field_idx < len(self.other_fields):
+                    next_field = self.other_fields[next_field_idx]
                     self.entries[next_field].focus_set()
-                elif next_field_idx == len(self.left_other_fields):
-                    self.entries[self.right_other_fields[0]].focus_set()
+                elif next_field_idx == len(self.other_fields):
+                    self.entries[f"Image ID ({self.fixed_photo_types[0]})"].focus_set()
                 return "break"
             text_widget.bind("<Tab>", handle_tab)
             self.entries[field] = text_widget
 
-        # 右邊框架：Photo ID 欄位
-        right_other_frame = tk.Frame(other_frame)
-        right_other_frame.pack(side="left", padx=5, pady=5)
-        for i, field in enumerate(self.right_other_fields):
-            tk.Label(right_other_frame, text=field, font=self.FONT_CONFIG).grid(row=i, column=0, padx=5, pady=2, sticky="e")
-            entry = tk.Entry(right_other_frame, width=30, font=self.FONT_CONFIG)
-            entry.grid(row=i, column=1, padx=5, pady=2, sticky="w")
-            self.entries[field] = entry
+    def create_photo_section(self):
+        self.photo_frame = ttk.LabelFrame(self.other_photo_frame, text="Photo", padding=10)
+        self.photo_frame.pack(side="left", fill="y", padx=10, pady=10)
+        tk.Label(self.photo_frame, text="Type", font=self.FONT_CONFIG).grid(row=0, column=0, padx=5, pady=2, sticky="e")
+        tk.Label(self.photo_frame, text="Image ID", font=self.FONT_CONFIG).grid(row=0, column=1, padx=5, pady=2, sticky="e")
+        for i, type_name in enumerate(self.fixed_photo_types, 1):
+            tk.Label(self.photo_frame, text=type_name, font=self.FONT_CONFIG).grid(row=i, column=0, padx=5, pady=2, sticky="e")
+            entry = tk.Entry(self.photo_frame, width=10, font=self.FONT_CONFIG)
+            entry.grid(row=i, column=1, padx=5, pady=2)
+            self.entries[f"Image ID ({type_name})"] = entry
+            self.photo_row_map[f"Image ID ({type_name})"] = i
+            self.setup_navigation([entry])
+        self.add_photo_id_field(4)
+
+    def add_photo_id_field(self, row, suffix=""):
+        unique_label = f"Image ID (add{suffix})" if suffix else f"Image ID (add1)"
+        type_entry = tk.Entry(self.photo_frame, width=10, font=self.FONT_CONFIG)
+        type_entry.grid(row=row, column=0, padx=5, pady=2)
+        image_entry = tk.Entry(self.photo_frame, width=10, font=self.FONT_CONFIG)
+        image_entry.grid(row=row, column=1, padx=5, pady=2)
+        self.entries[f"{unique_label}_type"] = type_entry
+        self.entries[unique_label] = image_entry
+        add_button = ttk.Button(self.photo_frame, text="+", width=2, command=lambda r=row: self.add_new_photo_id_field(r))
+        add_button.grid(row=row, column=2, padx=2, pady=2)
+        self.photo_row_map[unique_label] = row
+        self.setup_navigation([type_entry, image_entry, add_button])
+
+    def add_new_photo_id_field(self, row):
+        suffix = len(self.additional_photo_fields) + 1
+        unique_label = f"Image ID (add{suffix})"
+        self.additional_photo_fields.append(unique_label)
+        self.all_photo_fields = self.fixed_photo_types + self.additional_photo_fields
+        insert_row = row + 1
+        for field in sorted(self.photo_row_map.keys(), key=lambda x: self.photo_row_map[x], reverse=True):
+            if self.photo_row_map[field] >= insert_row:
+                for widget in self.photo_frame.grid_slaves(row=self.photo_row_map[field]):
+                    widget.grid(row=self.photo_row_map[field] + 1)
+                self.photo_row_map[field] += 1
+        self.add_photo_id_field(insert_row, suffix)
+        self.canvas.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.entries[f"Image ID (add{suffix})_type"].focus_set()
 
     def setup_navigation(self, widgets):
-        """設置tab順序和方向鍵導航"""
         for widget in widgets:
             widget.configure(takefocus=1)
             if isinstance(widget, tk.Entry):
@@ -340,13 +361,11 @@ class LEHRecordProgram:
                     widget.bind(f"<{direction}>", lambda e, w=widget: self.handle_arrow_key(e, w))
 
     def setup_measurement_bindings(self, entry, field):
-        """設置測量值輸入框的事件綁定"""
         entry.bind("<KeyRelease>", lambda e, f=field: self.calculate_avg(f))
         entry.bind("<KeyPress>", lambda e, f=field: self.calculate_avg(f))
         entry.bind("<Key>", lambda e, ent=entry, f=field: self.handle_decimal_input(e, ent, f))
 
     def create_buttons(self):
-        """創建按鈕"""
         save_button = ttk.Button(self.button_frame, text="Save", command=self.save_and_clear)
         save_button.pack(side="left", padx=5)
         prev_button = ttk.Button(self.button_frame, text="Previous Record", command=self.show_previous_record)
@@ -357,9 +376,12 @@ class LEHRecordProgram:
         next_another_button.pack(side="left", padx=5)
         new_button = ttk.Button(self.button_frame, text="New Record", command=self.new_record)
         new_button.pack(side="left", padx=5)
+        export_button = ttk.Button(self.button_frame, text="Export CSV", command=self.export_csv)
+        export_button.pack(side="left", padx=5)
+        view_cache_button = ttk.Button(self.button_frame, text="View Cache", command=self.view_cache)
+        view_cache_button.pack(side="left", padx=5)
 
     def setup_menu(self):
-        """設置選單"""
         menu_bar = tk.Menu(self.root)
         self.root.config(menu=menu_bar)
         file_menu = tk.Menu(menu_bar, tearoff=0)
@@ -368,7 +390,6 @@ class LEHRecordProgram:
         file_menu.add_command(label="Save As", command=self.save_as)
 
     def setup_bindings(self):
-        """設置全局事件綁定"""
         self.canvas.bind_all("<MouseWheel>", self.on_mouse_wheel)
         self.canvas.bind_all("<Button-4>", self.on_mouse_wheel)
         self.canvas.bind_all("<Button-5>", self.on_mouse_wheel)
@@ -376,7 +397,6 @@ class LEHRecordProgram:
         self.inner_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
     def calculate_avg(self, unique_label):
-        """計算平均值"""
         values = []
         for i in ["1", "2", "3"]:
             val = self.entries[f"{unique_label}{i}"].get().strip().replace("。", ".")
@@ -393,7 +413,6 @@ class LEHRecordProgram:
             self.averages[unique_label].config(text="N/A")
 
     def handle_decimal_input(self, event, entry, unique_label):
-        """處理小數點輸入"""
         if event.char in [".", "。"] or event.keysym == "KP_Decimal":
             current_pos = entry.index(tk.INSERT)
             entry.insert(current_pos, ".")
@@ -402,37 +421,31 @@ class LEHRecordProgram:
         return None
 
     def handle_arrow_key(self, event, current_widget):
-        """處理方向鍵導航"""
         if not isinstance(current_widget, tk.Entry):
             return
         current_key = [key for key, widget in self.entries.items() if widget == current_widget][0]
         if event.keysym == "Up":
-            prev_row = self.row_map.get(current_key, 1) - 1
+            prev_row = self.row_map.get(current_key, self.photo_row_map.get(current_key, 1)) - 1
             if prev_row >= 1:
-                for key, row in self.row_map.items():
+                for key, row in {**self.row_map, **self.photo_row_map}.items():
                     if row == prev_row:
                         self.entries[key].focus_set()
                         break
         elif event.keysym == "Down":
-            next_row = self.row_map.get(current_key, 1) + 1
-            if next_row <= max(self.row_map.values()):
-                for key, row in self.row_map.items():
+            next_row = self.row_map.get(current_key, self.photo_row_map.get(current_key, 1)) + 1
+            if next_row <= max({**self.row_map, **self.photo_row_map}.values()):
+                for key, row in {**self.row_map, **self.photo_row_map}.items():
                     if row == next_row:
                         self.entries[key].focus_set()
                         break
         elif event.keysym == "Left":
-            if current_key.endswith("2"):
-                self.entries[current_key[:-1] + "1"].focus_set()
-            elif current_key.endswith("3"):
-                self.entries[current_key[:-1] + "2"].focus_set()
+            if current_key.endswith("_type"):
+                self.entries[current_key[:-5]].focus_set()
         elif event.keysym == "Right":
-            if current_key.endswith("1"):
-                self.entries[current_key[:-1] + "2"].focus_set()
-            elif current_key.endswith("2"):
-                self.entries[current_key[:-1] + "3"].focus_set()
+            if not current_key.endswith("_type") and f"{current_key}_type" in self.entries:
+                self.entries[f"{current_key}_type"].focus_set()
 
     def on_mouse_wheel(self, event):
-        """處理滑鼠滾輪事件"""
         if platform.system() == "Windows":
             self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         elif platform.system() == "Darwin":
@@ -445,31 +458,47 @@ class LEHRecordProgram:
 
     @staticmethod
     def get_short_label(label):
-        """從標籤中提取括號內的簡短標籤"""
         if "(" in label and ")" in label:
             return label[label.index("(")+1:label.index(")")]
         return label
 
     def save_and_clear(self):
-        """儲存到 CSV 並清空輸入框"""
         self.root.focus_set()
         if not self.current_file:
+            self.status_label.config(text="No file selected!")
             return
         data = self.collect_data()
         if not data:
             return
-        self.save_data(data, self.current_record_index >= 0)  # 更新內部記錄
-        self.all_data = self.records.copy()  # 準備寫入 CSV 的資料
-        self.save_to_file()  # 寫入 CSV
-        saved_data = {field: self.entries[field].get() for field in self.basic_fields}
+        self.save_data(data, self.current_record_index >= 0)
+        self.save_to_cache(str(self.record_number), self.entries)
+        self.all_data = self.records.copy()
+        self.update_treeview()
         self.clear_entries()
-        for field, value in saved_data.items():
-            self.entries[field].insert(0, value)
-        self.reset_leh_fields()
-        self.status_label.config(text=f"Saved to {os.path.basename(self.current_file)}")
+        self.status_label.config(text="Data saved internally and cached")
+
+    def export_csv(self):
+        if not self.current_file:
+            self.status_label.config(text="No file selected!")
+            return
+        if self.save_to_file():
+            self.status_label.config(text=f"Exported to {os.path.basename(self.current_file)}")
+        else:
+            self.status_label.config(text="Failed to export file! Check logs for details.")
+
+    def update_treeview(self):
+        self.tree.delete(*self.tree.get_children())
+        records_by_num = {}
+        for row in self.records:
+            record_num = row["Record Number"]
+            if record_num not in records_by_num:
+                records_by_num[record_num] = row
+        for record_num, row in records_by_num.items():
+            display_num = str(int(record_num) + 1)
+            record_name = f"{display_num}. {row['Sample ID']} - {row['Tooth Type']}"
+            self.tree.insert("", "end", values=(record_name,))
 
     def collect_data(self):
-        """收集所有輸入資料"""
         base_data = {label: self.entries[label].get() or "n/a" for label in self.basic_fields}
         sample_id = base_data["Sample ID"]
         tooth_type = base_data["Tooth Type"]
@@ -482,15 +511,18 @@ class LEHRecordProgram:
             for i in ["1", "2", "3"]:
                 key = f"{field}{i}"
                 measurement_data[f"{short_field}{i}"] = self.entries[key].get() or "n/a"
-        other_data = {}
-        for label in self.other_fields:
-            if isinstance(self.entries[label], tk.Text):
-                other_data[label] = self.entries[label].get("1.0", tk.END).strip() or "n/a"
-            else:
-                other_data[label] = self.entries[label].get() or "n/a"
+        other_data = {field: self.entries[field].get("1.0", tk.END).strip() or "n/a" for field in self.other_fields}
+        photo_data = {}
+        for label in self.fixed_photo_types:
+            photo_data[f"Image ID ({label})"] = self.entries[f"Image ID ({label})"].get() or "n/a"
+        for label in self.additional_photo_fields:
+            type_val = self.entries[f"{label}_type"].get().strip() or "n/a"
+            image_val = self.entries[label].get().strip() or "n/a"
+            photo_data[f"{label}_type"] = type_val
+            photo_data[label] = image_val
         leh_rows = []
         all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
-        common_data = {**base_data, **measurement_data, **other_data}
+        common_data = {**base_data, **measurement_data, **other_data, **photo_data}
         for field in all_leh_fields:
             val1 = self.entries[f"{field}1"].get()
             val2 = self.entries[f"{field}2"].get()
@@ -498,7 +530,7 @@ class LEHRecordProgram:
             if val1 or val2 or val3:
                 row_data = common_data.copy()
                 row_data.update({
-                    "LEH Side": field,
+                    "LEH Side": self.get_short_label(field),
                     "Value 1": val1 or "n/a",
                     "Value 2": val2 or "n/a",
                     "Value 3": val3 or "n/a",
@@ -512,23 +544,26 @@ class LEHRecordProgram:
                 leh_rows.append(row_data)
         return {"base_data": base_data, "leh_rows": leh_rows}
 
-    def save_data(self, data, is_update=False):
-        """儲存資料到內部記錄列表"""
+    def save_data(self, data, is_update=False, new_record=False):
         base_data = data["base_data"]
         leh_rows = data["leh_rows"]
-        record_num = self.records[self.current_record_index]["Record Number"] if is_update else str(len([r for r in self.records if "Record Number" in r]) + 1)
+        if new_record:
+            self.record_number += 1
+        record_num = self.records[self.current_record_index]["Record Number"] if is_update else str(self.record_number)
         if is_update:
             self.records = [r for r in self.records if r["Record Number"] != record_num]
-            self.tree.delete(self.tree.get_children()[self.current_record_index])
         
         record_data = []
         common_data = base_data.copy()
         measurement_data = {f"{self.get_short_label(field)}{i}": self.entries[f"{field}{i}"].get() or "n/a" 
                             for field in self.measurement_fields for i in ["1", "2", "3"]}
         common_data.update(measurement_data)
-        other_data = {field: (self.entries[field].get("1.0", tk.END).strip() if isinstance(self.entries[field], tk.Text) else self.entries[field].get()) or "n/a" 
-                      for field in self.other_fields}
+        other_data = {field: self.entries[field].get("1.0", tk.END).strip() or "n/a" for field in self.other_fields}
+        photo_data = {f"Image ID ({label})": self.entries[f"Image ID ({label})"].get() or "n/a" for label in self.fixed_photo_types}
+        photo_data.update({field: self.entries[field].get() or "n/a" for field in self.additional_photo_fields})
+        photo_data.update({f"{field}_type": self.entries[f"{field}_type"].get() or "n/a" for field in self.additional_photo_fields})
         common_data.update(other_data)
+        common_data.update(photo_data)
         if not leh_rows:
             row_data = {"Record Number": record_num, "LEH Side": "", "Value 1": "n/a", "Value 2": "n/a", "Value 3": "n/a",
                         "Avg": "n/a", "LEH Count": "n/a", "LEH Type": "n/a", "CEJ Visible": "n/a", "Photo ID": "n/a"}
@@ -542,80 +577,77 @@ class LEHRecordProgram:
                 record_data.append(row_data)
         
         self.records.extend(record_data)
-        record_name = f"{record_num}. {base_data['Sample ID']} - {base_data['Tooth Type']}"
-        if is_update:
-            self.tree.insert("", self.current_record_index, values=(record_name,))
-        else:
-            self.tree.insert("", "end", values=(record_name,))
-        self.status_label.config(text=f"[{record_name}] {'Updated' if is_update else 'Saved'}")
 
     def save_to_file(self):
-        """將資料寫入CSV檔案"""
         try:
+            if not self.current_file or not os.path.isdir(os.path.dirname(self.current_file)):
+                raise ValueError("Invalid file path or directory")
             fieldnames = ["Record Number"] + self.basic_fields + \
                          [self.get_short_label(field) + i for field in self.measurement_fields for i in ["1", "2", "3"]] + \
                          ["LEH Side", "Value 1", "Value 2", "Value 3", "Avg", "LEH Count", "LEH Type", "CEJ Visible", "Photo ID"] + \
-                         self.other_fields
+                         self.other_fields + \
+                         [f"Image ID ({label})" for label in self.fixed_photo_types] + \
+                         [field for field in self.additional_photo_fields] + \
+                         [f"{field}_type" for field in self.additional_photo_fields]
             with open(self.current_file, "w", newline="", encoding="utf-8") as file:
                 writer = csv.DictWriter(file, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(self.all_data)
+            return True
         except Exception as e:
-            self.status_label.config(text=f"Error saving file: {str(e)}")
+            self.status_label.config(text=f"Error exporting file: {str(e)}")
             return False
-        return True
 
-    def clear_entries(self):
-        """清空所有輸入框"""
-        for entry in self.entries.values():
-            if isinstance(entry, tk.Text):
-                entry.delete("1.0", tk.END)
-            else:
-                entry.delete(0, tk.END)
+    def clear_entries(self, preserve_fields=None):
+        if preserve_fields is None:
+            preserve_fields = []
+        for key, entry in list(self.entries.items()):
+            if key not in preserve_fields and entry.winfo_exists():
+                if isinstance(entry, tk.Text):
+                    entry.delete("1.0", tk.END)
+                elif isinstance(entry, tk.Entry):
+                    entry.delete(0, tk.END)
         for avg_label in self.averages.values():
-            avg_label.config(text="N/A")
-
-    def clear_leh_entries(self):
-        """僅清空LEH記錄相關欄位"""
-        for field in self.all_leh_fields:
-            for i in ["1", "2", "3"]:
-                if f"{field}{i}" in self.entries:
-                    self.entries[f"{field}{i}"].delete(0, tk.END)
-            if f"{field} LEH Count" in self.entries:
-                self.entries[f"{field} LEH Count"].delete(0, tk.END)
-            if f"{field} LEH Type" in self.entries:
-                self.entries[f"{field} LEH Type"].delete(0, tk.END)
-            if f"{field} CEJ Visible" in self.entries:
-                self.entries[f"{field} CEJ Visible"].delete(0, tk.END)
-            if f"{field} Photo ID" in self.entries:
-                self.entries[f"{field} Photo ID"].delete(0, tk.END)
-            if field in self.averages:
-                self.averages[field].config(text="N/A")
-        for field in self.left_other_fields:  # 只清空左側其他資訊
-            if isinstance(self.entries[field], tk.Text):
-                self.entries[field].delete("1.0", tk.END)
-            else:
-                self.entries[field].delete(0, tk.END)
+            if avg_label.winfo_exists():
+                avg_label.config(text="N/A")
 
     def reset_leh_fields(self):
-        """重置額外的 LEH 欄位"""
-        for field in self.additional_leh_fields:
-            for widget in self.leh_frame.grid_slaves():
-                if widget.grid_info()["row"] == self.row_map[field]:
+        for field in self.additional_leh_fields[:]:
+            row = self.row_map.get(field)
+            if row:
+                for widget in self.leh_frame.grid_slaves(row=row):
                     widget.destroy()
-        for field in list(self.entries.keys()):
-            if field.startswith(tuple(self.additional_leh_fields)):
+            if field in self.row_map:
+                del self.row_map[field]
+            if field in self.entries:
                 del self.entries[field]
-        for field in list(self.averages.keys()):
-            if field in self.additional_leh_fields:
+            if field in self.averages:
                 del self.averages[field]
         self.additional_leh_fields = []
         self.all_leh_fields = self.initial_leh_fields.copy()
         for i, field in enumerate(self.initial_leh_fields, 1):
             self.row_map[field] = i
 
+    def reset_photo_fields(self):
+        for field in self.additional_photo_fields[:]:
+            row = self.photo_row_map.get(field)
+            if row:
+                for widget in self.photo_frame.grid_slaves(row=row):
+                    widget.destroy()
+            if field in self.photo_row_map:
+                del self.photo_row_map[field]
+            if field in self.entries:
+                del self.entries[field]
+            if f"{field}_type" in self.entries:
+                del self.entries[f"{field}_type"]
+        self.additional_photo_fields = []
+        self.all_photo_fields = self.fixed_photo_types.copy()
+        for i, type_name in enumerate(self.fixed_photo_types, 1):
+            self.photo_row_map[f"Image ID ({type_name})"] = i
+        self.canvas.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
     def open_file(self):
-        """開啟檔案（從選單）"""
         file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
         if not file_path:
             return
@@ -629,27 +661,18 @@ class LEHRecordProgram:
                 self.basic_fields = self.LABELS[:1] + self.context_fields + self.LABELS[2:9]
 
     def load_existing_file(self):
-        """載入現有檔案數據"""
         try:
             with open(self.current_file, "r", encoding="utf-8") as file:
                 reader = csv.DictReader(file)
                 self.all_data = list(reader)
                 self.records = self.all_data.copy()
-            self.tree.delete(*self.tree.get_children())
-            records_by_num = {}
-            for row in self.records:
-                record_num = row["Record Number"]
-                if record_num not in records_by_num:
-                    records_by_num[record_num] = row
-            for record_num, row in records_by_num.items():
-                record_name = f"{record_num}. {row['Sample ID']} - {row['Tooth Type']}"
-                self.tree.insert("", "end", values=(record_name,))
+                self.record_number = max([int(row["Record Number"]) for row in self.records if row["Record Number"].isdigit()], default=0)
+            self.update_treeview()
             self.status_label.config(text=f"Loaded file: {os.path.basename(self.current_file)}")
         except Exception as e:
             self.status_label.config(text=f"Error loading file: {str(e)}")
 
     def save_as(self):
-        """另存新檔"""
         file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
         if file_path:
             self.current_file = file_path
@@ -661,102 +684,186 @@ class LEHRecordProgram:
             self.status_label.config(text=f"Saved as {os.path.basename(self.current_file)}")
 
     def show_record(self, event=None):
-        """顯示選定的記錄"""
         selection = self.tree.selection()
         if not selection:
             return
         item = selection[0]
         self.current_record_index = self.tree.index(item)
-        self.clear_entries()
         self.reset_leh_fields()
+        self.reset_photo_fields()
+        self.clear_entries()
         record_num = self.records[self.current_record_index]["Record Number"]
         record_data = [row for row in self.records if row["Record Number"] == record_num]
         if not record_data:
             return
+        
         first_row = record_data[0]
         for field in self.basic_fields + self.other_fields:
-            if field in first_row and first_row[field] != "n/a":
+            if field in first_row and first_row[field]:
                 if isinstance(self.entries[field], tk.Text):
                     self.entries[field].insert("1.0", first_row[field])
                 else:
                     self.entries[field].insert(0, first_row[field])
+        
         for field in self.measurement_fields:
             short_field = self.get_short_label(field)
             for i in ["1", "2", "3"]:
                 key = f"{short_field}{i}"
-                if key in first_row and first_row[key] != "n/a":
+                if key in first_row and first_row[key]:
                     self.entries[f"{field}{i}"].insert(0, first_row[key])
             self.calculate_avg(field)
+        
+        for label in self.fixed_photo_types:
+            key = f"Image ID ({label})"
+            if key in first_row and first_row[key]:
+                self.entries[key].insert(0, first_row[key])
+        
+        dynamic_photos_added = set()
+        for field in first_row:
+            if field.startswith("Image ID (add") and field.endswith("_type"):
+                base_field = field[:-5]
+                if base_field not in self.all_photo_fields and base_field not in dynamic_photos_added:
+                    self.add_new_photo_id_field(self.photo_row_map[self.all_photo_fields[-1]])
+                    dynamic_photos_added.add(base_field)
+                if first_row[field]:
+                    self.entries[field].insert(0, first_row[field])
+                if base_field in first_row and first_row[base_field]:
+                    self.entries[base_field].insert(0, first_row[base_field])
+        
+        dynamic_leh_added = set()
         for row in record_data:
             leh_side = row.get("LEH Side", "")
-            if not leh_side or leh_side == "n/a":
+            if not leh_side:
                 continue
-            full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == leh_side), leh_side)
-            if "_" in leh_side and leh_side not in self.all_leh_fields:
-                base_label = leh_side.split("_")[0]
-                for f in self.initial_leh_fields:
-                    if self.get_short_label(f) == base_label:
-                        self.add_new_leh_field(f, self.row_map[f])
-                        full_label = leh_side
-                        break
-            for i in ["1", "2", "3"]:
-                if f"Value {i}" in row and row[f"Value {i}"] != "n/a":
-                    self.entries[f"{full_label}{i}"].insert(0, row[f"Value {i}"])
-            for field_type in ["LEH Count", "LEH Type", "CEJ Visible", "Photo ID"]:
-                if field_type in row and row[field_type] != "n/a":
-                    self.entries[f"{full_label} {field_type}"].insert(0, row[field_type])
-            self.calculate_avg(full_label)
+            full_label = None
+            if "_" in leh_side:
+                base_label, suffix = leh_side.rsplit("_", 1)
+                full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == base_label), None)
+                if full_label and f"{full_label}_{suffix}" not in self.all_leh_fields and f"{full_label}_{suffix}" not in dynamic_leh_added:
+                    current_row = self.row_map.get(full_label)
+                    self.add_new_leh_field(full_label, current_row)
+                    dynamic_leh_added.add(f"{full_label}_{suffix}")
+                    full_label = f"{full_label}_{suffix}"
+            else:
+                full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == leh_side), None)
+            
+            if full_label:
+                for i in ["1", "2", "3"]:
+                    key = f"Value {i}"
+                    if key in row and row[key]:
+                        self.entries[f"{full_label}{i}"].insert(0, row[key])
+                for field_type in ["LEH Count", "LEH Type", "CEJ Visible", "Photo ID"]:
+                    key = f"{full_label} {field_type}"
+                    if field_type in row and row[field_type]:
+                        self.entries[key].insert(0, row[field_type])
+                self.calculate_avg(full_label)
+        
+        self.canvas.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.status_label.config(text=f"Showing record {int(record_num) + 1}")
 
     def show_previous_record(self):
-        """顯示上一筆記錄"""
         if self.current_record_index > 0:
             self.current_record_index -= 1
             self.tree.selection_set(self.tree.get_children()[self.current_record_index])
             self.show_record()
 
     def next_record(self):
-        """顯示下一筆記錄（保留基本資訊和 Photo ID，清空測量值、LEH 和左側其他資訊）"""
         data = self.collect_data()
         if data:
-            self.save_data(data, self.current_record_index >= 0)  # 儲存到內部記錄
-        
-        # 儲存基本資訊和 Photo ID
+            self.save_data(data, self.current_record_index >= 0)
+            self.save_to_cache(str(self.record_number), self.entries)
+            self.update_treeview()
         saved_basic_data = {field: self.entries[field].get() for field in self.basic_fields}
-        saved_photo_data = {field: self.entries[field].get() for field in self.right_other_fields}
-        # 清空所有欄位
+        saved_photo_data = {field: self.entries[field].get() for field in [f"Image ID ({t})" for t in self.fixed_photo_types] + self.additional_photo_fields}
+        saved_photo_types = {f"{field}_type": self.entries[f"{field}_type"].get() for field in self.additional_photo_fields}
         self.clear_entries()
-        # 恢復基本資訊和 Photo ID
         for field, value in saved_basic_data.items():
-            self.entries[field].delete(0, tk.END)
-            self.entries[field].insert(0, value)
+            if value and field in self.entries and self.entries[field].winfo_exists():
+                self.entries[field].insert(0, value)
         for field, value in saved_photo_data.items():
-            self.entries[field].delete(0, tk.END)
-            self.entries[field].insert(0, value)
-        # 重設 LEH 欄位
+            if value and field in self.entries and self.entries[field].winfo_exists():
+                self.entries[field].insert(0, value)
+        for field, value in saved_photo_types.items():
+            if value and field in self.entries and self.entries[field].winfo_exists():
+                self.entries[field].insert(0, value)
         self.reset_leh_fields()
         self.current_record_index = -1
         self.status_label.config(text="Ready for next record (same context)")
 
     def next_another_record(self):
-        """顯示下一筆記錄（保留Context，其他清空）"""
         data = self.collect_data()
         if data:
-            self.save_data(data, self.current_record_index >= 0)
-        
+            self.save_data(data, self.current_record_index >= 0, new_record=True)
+            self.save_to_cache(str(self.record_number), self.entries)
+            self.all_data = self.records.copy()
+            self.update_treeview()
         saved_context = {field: self.entries[field].get() for field in self.context_fields}
-        self.clear_entries()
+        self.clear_entries(preserve_fields=self.context_fields)
         self.reset_leh_fields()
+        self.reset_photo_fields()
         for field, value in saved_context.items():
-            self.entries[field].insert(0, value)
+            if value and self.entries[field].winfo_exists():
+                self.entries[field].insert(0, value)
         self.current_record_index = -1
         self.status_label.config(text="Ready for next record (new context)")
 
     def new_record(self):
-        """開始新記錄"""
         self.current_record_index = -1
         self.clear_entries()
         self.reset_leh_fields()
+        self.reset_photo_fields()
         self.status_label.config(text="Started new record")
+
+    def view_cache(self):
+        cache_window = tk.Toplevel(self.root)
+        cache_window.title("Cached Records")
+        cache_window.geometry("600x400")
+        cache_window.transient(self.root)
+        cache_window.grab_set()
+
+        tree = ttk.Treeview(cache_window, columns=("Record", "Sample ID", "Tooth Type"), show="headings")
+        tree.heading("Record", text="Record Number")
+        tree.heading("Sample ID", text="Sample ID")
+        tree.heading("Tooth Type", text="Tooth Type")
+        tree.column("Record", width=100)
+        tree.column("Sample ID", width=200)
+        tree.column("Tooth Type", width=200)
+        tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        scrollbar = ttk.Scrollbar(cache_window, orient="vertical", command=tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        for record_num, data in self.record_cache.items():
+            sample_id = data.get("Sample ID", "N/A")
+            tooth_type = data.get("Tooth Type", "N/A")
+            tree.insert("", "end", values=(str(int(record_num) + 1), sample_id, tooth_type))
+
+        def show_cached_record(event):
+            selection = tree.selection()
+            if not selection:
+                return
+            item = tree.item(selection[0])
+            record_num = str(int(item["values"][0]) - 1)
+            cached_data = self.record_cache.get(record_num)
+            if cached_data:
+                self.reset_leh_fields()
+                self.reset_photo_fields()
+                self.clear_entries()
+                for field, value in cached_data.items():
+                    if field in self.entries and value and self.entries[field].winfo_exists():
+                        if isinstance(self.entries[field], tk.Text):
+                            self.entries[field].insert("1.0", value)
+                        else:
+                            self.entries[field].insert(0, value)
+                        if field.endswith(("1", "2", "3")) and field[:-1] in self.averages:
+                            self.calculate_avg(field[:-1])
+                self.canvas.update_idletasks()
+                self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+        tree.bind("<Double-1>", show_cached_record)
+        tk.Button(cache_window, text="Close", command=cache_window.destroy).pack(pady=5)
 
 if __name__ == "__main__":
     app = LEHRecordProgram()
