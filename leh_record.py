@@ -61,7 +61,7 @@ class LEHRecordProgram:
         self.current_record_index = -1
         self.all_leh_fields = self.initial_leh_fields.copy()
         self.context_fields = []
-        self.record_number = 0
+        self.record_number = 1
 
     def setup_cache(self):
         self.cache_file = os.path.join(tempfile.gettempdir(), 'leh_record_cache.pkl')
@@ -171,16 +171,20 @@ class LEHRecordProgram:
     def create_record_frame(self):
         self.record_frame = ttk.LabelFrame(self.outer_frame, text="Previous Records", padding=10)
         self.record_frame.pack(side="left", fill="y", padx=10, pady=10)
-        self.record_canvas = tk.Canvas(self.record_frame, width=200)
+        self.record_canvas = tk.Canvas(self.record_frame, width=300)
         self.record_canvas.pack(side="left", fill="both", expand=True)
         record_scrollbar = ttk.Scrollbar(self.record_frame, orient="vertical", command=self.record_canvas.yview)
         record_scrollbar.pack(side="right", fill="y")
         self.record_canvas.configure(yscrollcommand=record_scrollbar.set)
         self.record_inner_frame = tk.Frame(self.record_canvas)
         self.record_canvas.create_window((0, 0), window=self.record_inner_frame, anchor="nw")
-        self.tree = ttk.Treeview(self.record_inner_frame, columns=("Name",), show="headings", height=20)
-        self.tree.heading("Name", text="Sample ID + Tooth Type")
-        self.tree.column("Name", width=180, anchor="w")
+        self.tree = ttk.Treeview(self.record_inner_frame, columns=("Record", "Sample ID", "Tooth Type"), show="headings", height=20)
+        self.tree.heading("Record", text="Record Number")
+        self.tree.heading("Sample ID", text="Sample ID")
+        self.tree.heading("Tooth Type", text="Tooth Type")
+        self.tree.column("Record", width=100, anchor="w")
+        self.tree.column("Sample ID", width=100, anchor="w")
+        self.tree.column("Tooth Type", width=100, anchor="w")
         self.tree.pack(fill="y", expand=True)
         self.tree.bind("<Double-1>", self.show_record)
 
@@ -242,6 +246,11 @@ class LEHRecordProgram:
     def add_leh_field(self, label, row, suffix=""):
         unique_label = f"{label}_{suffix}" if suffix else label
         short_label = self.get_short_label(label)
+        
+        # 清除該 row 的現有 widget，避免覆蓋
+        for widget in self.leh_frame.grid_slaves(row=row):
+            widget.grid_forget()
+        
         tk.Label(self.leh_frame, text=short_label, font=self.FONT_CONFIG).grid(row=row, column=0, padx=5, pady=2, sticky="e")
         entries = []
         for i in range(3):
@@ -276,17 +285,23 @@ class LEHRecordProgram:
         unique_label = f"{label}_{suffix}"
         self.additional_leh_fields.append(unique_label)
         self.all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
-        insert_row = self.row_map[label] + 1
+        insert_row = row + 1
+        print(f"Adding {unique_label} at row {insert_row}, current row_map: {self.row_map}")
+        
+        # 只移動 insert_row 之後的欄位
         for field in sorted(self.row_map.keys(), key=lambda x: self.row_map[x], reverse=True):
             current_row = self.row_map[field]
             if current_row >= insert_row:
                 for widget in self.leh_frame.grid_slaves(row=current_row):
                     widget.grid(row=current_row + 1)
                 self.row_map[field] = current_row + 1
+        
+        # 添加新欄位
         self.add_leh_field(label, insert_row, suffix)
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.entries[f"{unique_label}1"].focus_set()
+        print(f"After adding {unique_label}, updated row_map: {self.row_map}")
 
     def create_other_section(self):
         self.other_frame = ttk.LabelFrame(self.other_photo_frame, text="Other Information", padding=10)
@@ -470,11 +485,15 @@ class LEHRecordProgram:
         data = self.collect_data()
         if not data:
             return
-        self.save_data(data, self.current_record_index >= 0)
+        if self.current_record_index >= 0:
+            self.save_data(data, is_update=True)
+        else:
+            self.save_data(data, is_update=False, new_record=True)
         self.save_to_cache(str(self.record_number), self.entries)
         self.all_data = self.records.copy()
         self.update_treeview()
         self.clear_entries()
+        self.current_record_index = -1
         self.status_label.config(text="Data saved internally and cached")
 
     def export_csv(self):
@@ -494,12 +513,12 @@ class LEHRecordProgram:
             if record_num not in records_by_num:
                 records_by_num[record_num] = row
         for record_num, row in records_by_num.items():
-            display_num = str(int(record_num) + 1)
-            record_name = f"{display_num}. {row['Sample ID']} - {row['Tooth Type']}"
-            self.tree.insert("", "end", values=(record_name,))
+            sample_id = row["Sample ID"]
+            tooth_type = row["Tooth Type"]
+            self.tree.insert("", "end", values=(record_num, sample_id, tooth_type))
 
     def collect_data(self):
-        base_data = {label: self.entries[label].get() or "n/a" for label in self.basic_fields}
+        base_data = {label: self.entries[label].get() for label in self.basic_fields}
         sample_id = base_data["Sample ID"]
         tooth_type = base_data["Tooth Type"]
         if not sample_id or not tooth_type:
@@ -510,14 +529,14 @@ class LEHRecordProgram:
             short_field = self.get_short_label(field)
             for i in ["1", "2", "3"]:
                 key = f"{field}{i}"
-                measurement_data[f"{short_field}{i}"] = self.entries[key].get() or "n/a"
-        other_data = {field: self.entries[field].get("1.0", tk.END).strip() or "n/a" for field in self.other_fields}
+                measurement_data[f"{short_field}{i}"] = self.entries[key].get()
+        other_data = {field: self.entries[field].get("1.0", tk.END).strip() for field in self.other_fields}
         photo_data = {}
         for label in self.fixed_photo_types:
-            photo_data[f"Image ID ({label})"] = self.entries[f"Image ID ({label})"].get() or "n/a"
+            photo_data[f"Image ID ({label})"] = self.entries[f"Image ID ({label})"].get()
         for label in self.additional_photo_fields:
-            type_val = self.entries[f"{label}_type"].get().strip() or "n/a"
-            image_val = self.entries[label].get().strip() or "n/a"
+            type_val = self.entries[f"{label}_type"].get().strip()
+            image_val = self.entries[label].get().strip()
             photo_data[f"{label}_type"] = type_val
             photo_data[label] = image_val
         leh_rows = []
@@ -531,16 +550,16 @@ class LEHRecordProgram:
                 row_data = common_data.copy()
                 row_data.update({
                     "LEH Side": self.get_short_label(field),
-                    "Value 1": val1 or "n/a",
-                    "Value 2": val2 or "n/a",
-                    "Value 3": val3 or "n/a",
-                    "LEH Count": self.entries[f"{field} LEH Count"].get() or "n/a",
-                    "LEH Type": self.entries[f"{field} LEH Type"].get() or "n/a",
-                    "CEJ Visible": self.entries[f"{field} CEJ Visible"].get() or "n/a",
-                    "Photo ID": self.entries[f"{field} Photo ID"].get() or "n/a"
+                    "Value 1": val1,
+                    "Value 2": val2,
+                    "Value 3": val3,
+                    "LEH Count": self.entries[f"{field} LEH Count"].get(),
+                    "LEH Type": self.entries[f"{field} LEH Type"].get(),
+                    "CEJ Visible": self.entries[f"{field} CEJ Visible"].get(),
+                    "Photo ID": self.entries[f"{field} Photo ID"].get()
                 })
-                values = [float(v) for v in [val1, val2, val3] if v and v != "n/a"]
-                row_data["Avg"] = f"{sum(values) / len(values):.2f}" if values else "n/a"
+                values = [float(v) for v in [val1, val2, val3] if v]
+                row_data["Avg"] = f"{sum(values) / len(values):.2f}" if values else ""
                 leh_rows.append(row_data)
         return {"base_data": base_data, "leh_rows": leh_rows}
 
@@ -555,18 +574,18 @@ class LEHRecordProgram:
         
         record_data = []
         common_data = base_data.copy()
-        measurement_data = {f"{self.get_short_label(field)}{i}": self.entries[f"{field}{i}"].get() or "n/a" 
+        measurement_data = {f"{self.get_short_label(field)}{i}": self.entries[f"{field}{i}"].get() 
                             for field in self.measurement_fields for i in ["1", "2", "3"]}
         common_data.update(measurement_data)
-        other_data = {field: self.entries[field].get("1.0", tk.END).strip() or "n/a" for field in self.other_fields}
-        photo_data = {f"Image ID ({label})": self.entries[f"Image ID ({label})"].get() or "n/a" for label in self.fixed_photo_types}
-        photo_data.update({field: self.entries[field].get() or "n/a" for field in self.additional_photo_fields})
-        photo_data.update({f"{field}_type": self.entries[f"{field}_type"].get() or "n/a" for field in self.additional_photo_fields})
+        other_data = {field: self.entries[field].get("1.0", tk.END).strip() for field in self.other_fields}
+        photo_data = {f"Image ID ({label})": self.entries[f"Image ID ({label})"].get() for label in self.fixed_photo_types}
+        photo_data.update({field: self.entries[field].get() for field in self.additional_photo_fields})
+        photo_data.update({f"{field}_type": self.entries[f"{field}_type"].get() for field in self.additional_photo_fields})
         common_data.update(other_data)
         common_data.update(photo_data)
         if not leh_rows:
-            row_data = {"Record Number": record_num, "LEH Side": "", "Value 1": "n/a", "Value 2": "n/a", "Value 3": "n/a",
-                        "Avg": "n/a", "LEH Count": "n/a", "LEH Type": "n/a", "CEJ Visible": "n/a", "Photo ID": "n/a"}
+            row_data = {"Record Number": record_num, "LEH Side": "", "Value 1": "", "Value 2": "", "Value 3": "",
+                        "Avg": "", "LEH Count": "", "LEH Type": "", "CEJ Visible": "", "Photo ID": ""}
             row_data.update(common_data)
             record_data.append(row_data)
         else:
@@ -577,6 +596,7 @@ class LEHRecordProgram:
                 record_data.append(row_data)
         
         self.records.extend(record_data)
+        print(f"Saved record: {record_num}, Total records: {len(self.records)}")
 
     def save_to_file(self):
         try:
@@ -666,7 +686,7 @@ class LEHRecordProgram:
                 reader = csv.DictReader(file)
                 self.all_data = list(reader)
                 self.records = self.all_data.copy()
-                self.record_number = max([int(row["Record Number"]) for row in self.records if row["Record Number"].isdigit()], default=0)
+                self.record_number = max([int(row["Record Number"]) for row in self.records if row["Record Number"].isdigit()], default=0) + 1
             self.update_treeview()
             self.status_label.config(text=f"Loaded file: {os.path.basename(self.current_file)}")
         except Exception as e:
@@ -689,13 +709,15 @@ class LEHRecordProgram:
             return
         item = selection[0]
         self.current_record_index = self.tree.index(item)
+        selected_record_num = self.tree.item(item)["values"][0]
+        record_data = [row for row in self.records if row["Record Number"] == str(selected_record_num)]
+        print(f"Showing record {selected_record_num}, data: {record_data}")
+        if not record_data:
+            return
+        
         self.reset_leh_fields()
         self.reset_photo_fields()
         self.clear_entries()
-        record_num = self.records[self.current_record_index]["Record Number"]
-        record_data = [row for row in self.records if row["Record Number"] == record_num]
-        if not record_data:
-            return
         
         first_row = record_data[0]
         for field in self.basic_fields + self.other_fields:
@@ -741,9 +763,10 @@ class LEHRecordProgram:
                 full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == base_label), None)
                 if full_label and f"{full_label}_{suffix}" not in self.all_leh_fields and f"{full_label}_{suffix}" not in dynamic_leh_added:
                     current_row = self.row_map.get(full_label)
-                    self.add_new_leh_field(full_label, current_row)
-                    dynamic_leh_added.add(f"{full_label}_{suffix}")
-                    full_label = f"{full_label}_{suffix}"
+                    if current_row:
+                        self.add_new_leh_field(full_label, current_row)
+                        dynamic_leh_added.add(f"{full_label}_{suffix}")
+                        full_label = f"{full_label}_{suffix}"
             else:
                 full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == leh_side), None)
             
@@ -760,7 +783,7 @@ class LEHRecordProgram:
         
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self.status_label.config(text=f"Showing record {int(record_num) + 1}")
+        self.status_label.config(text=f"Showing record {selected_record_num}")
 
     def show_previous_record(self):
         if self.current_record_index > 0:
@@ -836,17 +859,17 @@ class LEHRecordProgram:
         tree.configure(yscrollcommand=scrollbar.set)
 
         for record_num, data in self.record_cache.items():
-            sample_id = data.get("Sample ID", "N/A")
-            tooth_type = data.get("Tooth Type", "N/A")
-            tree.insert("", "end", values=(str(int(record_num) + 1), sample_id, tooth_type))
+            sample_id = data.get("Sample ID", "")
+            tooth_type = data.get("Tooth Type", "")
+            tree.insert("", "end", values=(record_num, sample_id, tooth_type))
 
         def show_cached_record(event):
             selection = tree.selection()
             if not selection:
                 return
             item = tree.item(selection[0])
-            record_num = str(int(item["values"][0]) - 1)
-            cached_data = self.record_cache.get(record_num)
+            record_num = item["values"][0]
+            cached_data = self.record_cache.get(str(record_num))
             if cached_data:
                 self.reset_leh_fields()
                 self.reset_photo_fields()
