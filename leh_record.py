@@ -60,6 +60,7 @@ class LEHRecordProgram:
         self.photo_row_map = {}
         self.current_record_index = -1
         self.all_leh_fields = self.initial_leh_fields.copy()
+        self.leh_field_order = self.initial_leh_fields.copy()  # 維護欄位順序
         self.context_fields = []
         self.record_number = 1
 
@@ -240,17 +241,41 @@ class LEHRecordProgram:
         headers = ["LEH Count", "LEH Type", "CEJ Visible", "Photo ID"]
         for i, header in enumerate(headers):
             tk.Label(self.leh_frame, text=header, font=self.FONT_CONFIG).grid(row=0, column=i+5, padx=5, pady=2, sticky="w")
-        for i, field in enumerate(self.initial_leh_fields, 1):
-            self.add_leh_field(field, i)
+        self.render_leh_fields()
 
-    def add_leh_field(self, label, row, suffix=""):
-        unique_label = f"{label}_{suffix}" if suffix else label
-        short_label = self.get_short_label(label)
-        
-        # 清除該 row 的現有 widget，避免覆蓋
-        for widget in self.leh_frame.grid_slaves(row=row):
-            widget.grid_forget()
-        
+    def render_leh_fields(self):
+        # 保存現有值
+        saved_values = {}
+        for field in self.leh_field_order:
+            for suffix in ["1", "2", "3", " LEH Count", " LEH Type", " CEJ Visible", " Photo ID"]:
+                key = f"{field}{suffix}"
+                if key in self.entries and self.entries[key].winfo_exists():
+                    saved_values[key] = self.entries[key].get()
+            if field in self.averages and self.averages[field].winfo_exists():
+                saved_values[f"{field}_avg"] = self.averages[field].cget("text")
+
+        # 清空現有欄位（保留標題行）
+        for widget in self.leh_frame.grid_slaves():
+            if int(widget.grid_info()["row"]) > 0:
+                widget.grid_forget()
+
+        # 重新渲染欄位並恢復值
+        self.entries = {k: v for k, v in self.entries.items() if not any(k.startswith(f) for f in self.leh_field_order)}
+        self.averages = {k: v for k, v in self.averages.items() if not any(k.startswith(f) for f in self.leh_field_order)}
+        self.row_map.clear()
+
+        for i, field in enumerate(self.leh_field_order, 1):
+            self.add_leh_field(field, i)
+            # 恢復值
+            for suffix in ["1", "2", "3", " LEH Count", " LEH Type", " CEJ Visible", " Photo ID"]:
+                key = f"{field}{suffix}"
+                if key in saved_values and key in self.entries:
+                    self.entries[key].insert(0, saved_values[key])
+            if f"{field}_avg" in saved_values and field in self.averages:
+                self.averages[field].config(text=saved_values[f"{field}_avg"])
+
+    def add_leh_field(self, unique_label, row):
+        short_label = self.get_short_label(unique_label)
         tk.Label(self.leh_frame, text=short_label, font=self.FONT_CONFIG).grid(row=row, column=0, padx=5, pady=2, sticky="e")
         entries = []
         for i in range(3):
@@ -274,30 +299,27 @@ class LEHRecordProgram:
         self.entries[f"{unique_label} LEH Type"] = type_entry
         self.entries[f"{unique_label} CEJ Visible"] = cej_entry
         self.entries[f"{unique_label} Photo ID"] = photo_entry
-        add_button = ttk.Button(self.leh_frame, text="+", width=2, command=lambda l=label, r=row: self.add_new_leh_field(l, r))
+        base_label = unique_label.split("_")[0] if "_" in unique_label else unique_label
+        add_button = ttk.Button(self.leh_frame, text="+", width=2, command=lambda l=base_label: self.add_new_leh_field(l))
         add_button.grid(row=row, column=9, padx=2, pady=2)
         all_widgets = entries + [count_entry, type_entry, cej_entry, photo_entry, add_button]
         self.setup_navigation(all_widgets)
         self.row_map[unique_label] = row
 
-    def add_new_leh_field(self, label, row):
+    def add_new_leh_field(self, label):
         suffix = str(len([f for f in self.additional_leh_fields if f.startswith(label)]) + 1)
         unique_label = f"{label}_{suffix}"
         self.additional_leh_fields.append(unique_label)
         self.all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
-        insert_row = row + 1
-        print(f"Adding {unique_label} at row {insert_row}, current row_map: {self.row_map}")
         
-        # 只移動 insert_row 之後的欄位
-        for field in sorted(self.row_map.keys(), key=lambda x: self.row_map[x], reverse=True):
-            current_row = self.row_map[field]
-            if current_row >= insert_row:
-                for widget in self.leh_frame.grid_slaves(row=current_row):
-                    widget.grid(row=current_row + 1)
-                self.row_map[field] = current_row + 1
+        # 在 leh_field_order 中插入新欄位到原始欄位後
+        insert_index = self.leh_field_order.index(label) + 1
+        self.leh_field_order.insert(insert_index, unique_label)
         
-        # 添加新欄位
-        self.add_leh_field(label, insert_row, suffix)
+        print(f"Adding {unique_label}, current row_map: {self.row_map}")
+        
+        # 重新渲染所有欄位並保留值
+        self.render_leh_fields()
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.entries[f"{unique_label}1"].focus_set()
@@ -633,10 +655,6 @@ class LEHRecordProgram:
 
     def reset_leh_fields(self):
         for field in self.additional_leh_fields[:]:
-            row = self.row_map.get(field)
-            if row:
-                for widget in self.leh_frame.grid_slaves(row=row):
-                    widget.destroy()
             if field in self.row_map:
                 del self.row_map[field]
             if field in self.entries:
@@ -645,8 +663,8 @@ class LEHRecordProgram:
                 del self.averages[field]
         self.additional_leh_fields = []
         self.all_leh_fields = self.initial_leh_fields.copy()
-        for i, field in enumerate(self.initial_leh_fields, 1):
-            self.row_map[field] = i
+        self.leh_field_order = self.initial_leh_fields.copy()
+        self.render_leh_fields()
 
     def reset_photo_fields(self):
         for field in self.additional_photo_fields[:]:
@@ -762,11 +780,9 @@ class LEHRecordProgram:
                 base_label, suffix = leh_side.rsplit("_", 1)
                 full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == base_label), None)
                 if full_label and f"{full_label}_{suffix}" not in self.all_leh_fields and f"{full_label}_{suffix}" not in dynamic_leh_added:
-                    current_row = self.row_map.get(full_label)
-                    if current_row:
-                        self.add_new_leh_field(full_label, current_row)
-                        dynamic_leh_added.add(f"{full_label}_{suffix}")
-                        full_label = f"{full_label}_{suffix}"
+                    self.add_new_leh_field(full_label)
+                    dynamic_leh_added.add(f"{full_label}_{suffix}")
+                    full_label = f"{full_label}_{suffix}"
             else:
                 full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == leh_side), None)
             
