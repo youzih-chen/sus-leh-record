@@ -14,6 +14,10 @@ class LEHRecordProgram:
         self.setup_variables()
         self.setup_cache()
         self.create_main_window()
+
+        # 強制設置快照資料夾
+        self.data_dir = r"C:\Users\shiqi\Desktop\code_test"
+
         self.setup_file_location()
         self.setup_context_fields()
         self.create_frames()
@@ -60,9 +64,11 @@ class LEHRecordProgram:
         self.photo_row_map = {}
         self.current_record_index = -1
         self.all_leh_fields = self.initial_leh_fields.copy()
-        self.leh_field_order = self.initial_leh_fields.copy()  # 維護欄位順序
+        self.leh_field_order = self.initial_leh_fields.copy()
         self.context_fields = []
         self.record_number = 1
+        self.sample_number = 1  # 新增 sample number
+        self.record_order = []
 
     def setup_cache(self):
         self.cache_file = os.path.join(tempfile.gettempdir(), 'leh_record_cache.pkl')
@@ -88,7 +94,7 @@ class LEHRecordProgram:
                 pickle.dump(self.record_cache, f)
             print(f"Cached record {record_num}")
         except Exception as e:
-            print(f"快取保存失敗: {e}")
+            print(f"Failed to save cache: {e}")
 
     def cleanup_cache(self):
         try:
@@ -123,12 +129,8 @@ class LEHRecordProgram:
             if file_path:
                 self.current_file = file_path
                 self.data_dir = os.path.dirname(file_path)
-                context_file = os.path.join(self.data_dir, "context_config.pkl")
-                if os.path.exists(context_file):
-                    with open(context_file, 'rb') as f:
-                        self.context_fields = pickle.load(f)
-                        self.basic_fields = self.LABELS[:1] + self.context_fields + self.LABELS[2:9]
                 self.load_existing_file()
+                self.load_metadata()
                 file_window.destroy()
 
         tk.Button(file_window, text="Create New Folder", command=new_folder).pack(pady=5)
@@ -139,24 +141,24 @@ class LEHRecordProgram:
         if not self.context_fields:
             context_window = tk.Toplevel(self.root)
             context_window.title("Set Context Fields")
-            context_window.geometry("400x300")
+            context_window.geometry("300x150")
             context_window.transient(self.root)
             context_window.grab_set()
 
-            tk.Label(context_window, text="Enter Context subfields (one per line):").pack(pady=5)
-            text_area = tk.Text(context_window, height=10, width=40)
-            text_area.pack(pady=5)
+            tk.Label(context_window, text="Enter Context subfields (comma-separated, e.g., Site, Layer):").pack(pady=10)
+            entry = tk.Entry(context_window, width=40, font=self.FONT_CONFIG)
+            entry.pack(pady=5)
+            entry.focus_set()
 
             def save_context_fields():
-                fields = text_area.get("1.0", tk.END).strip().split("\n")
-                self.context_fields = [f.strip() for f in fields if f.strip()]
-                self.basic_fields = self.LABELS[:1] + self.context_fields + self.LABELS[2:9]
-                if self.data_dir:
-                    with open(os.path.join(self.data_dir, "context_config.pkl"), 'wb') as f:
-                        pickle.dump(self.context_fields, f)
+                fields = entry.get().strip()
+                if fields:
+                    self.context_fields = [f.strip() for f in fields.split(",") if f.strip()]
+                    self.basic_fields = self.LABELS[:1] + self.context_fields + self.LABELS[2:9]
                 context_window.destroy()
 
-            tk.Button(context_window, text="Save", command=save_context_fields).pack(pady=5)
+            tk.Button(context_window, text="Save", command=save_context_fields).pack(pady=10)
+            entry.bind("<Return>", lambda e: save_context_fields())
             context_window.wait_window()
 
     def create_frames(self):
@@ -179,15 +181,39 @@ class LEHRecordProgram:
         self.record_canvas.configure(yscrollcommand=record_scrollbar.set)
         self.record_inner_frame = tk.Frame(self.record_canvas)
         self.record_canvas.create_window((0, 0), window=self.record_inner_frame, anchor="nw")
-        self.tree = ttk.Treeview(self.record_inner_frame, columns=("Record", "Sample ID", "Tooth Type"), show="headings", height=20)
-        self.tree.heading("Record", text="Record Number")
+        self.tree = ttk.Treeview(self.record_inner_frame, columns=("Record Number", "Sample ID", "Tooth Type", "Snapshot File"), show="headings", height=20)
+        self.tree.heading("Record Number", text="Record Number")
         self.tree.heading("Sample ID", text="Sample ID")
         self.tree.heading("Tooth Type", text="Tooth Type")
-        self.tree.column("Record", width=100, anchor="w")
+        self.tree.heading("Snapshot File", text="Snapshot File")
+        self.tree.column("Record Number", width=80, anchor="w")
         self.tree.column("Sample ID", width=100, anchor="w")
         self.tree.column("Tooth Type", width=100, anchor="w")
+        self.tree.column("Snapshot File", width=200, anchor="w")
+        self.tree["displaycolumns"] = ("Record Number", "Sample ID", "Tooth Type")
         self.tree.pack(fill="y", expand=True)
         self.tree.bind("<Double-1>", self.show_record)
+
+        # 載入索引檔，重建Treeview
+        try:
+            import os, json
+            snapshot_dir = os.path.join(self.data_dir if self.data_dir else ".", "snapshots")
+            index_path = os.path.join(snapshot_dir, "index.json")
+            if os.path.exists(index_path):
+                with open(index_path, "r", encoding="utf-8") as f:
+                    index_list = json.load(f)
+                for item in index_list:
+                    self.tree.insert("", "end", values=(
+                        item.get("record_number", ""),
+                        item.get("sample_id", ""),
+                        item.get("tooth_type", ""),
+                        item.get("snapshot_file", item.get("uuid", "") + ".json")
+                    ))
+            print(f"Loaded index: {index_path}")
+        except Exception as e:
+            print(f"Failed to load index: {e}")
+
+        self.update_treeview()
 
     def create_main_frame(self):
         self.main_frame = tk.Frame(self.outer_frame)
@@ -244,7 +270,6 @@ class LEHRecordProgram:
         self.render_leh_fields()
 
     def render_leh_fields(self):
-        # 保存現有值
         saved_values = {}
         for field in self.leh_field_order:
             for suffix in ["1", "2", "3", " LEH Count", " LEH Type", " CEJ Visible", " Photo ID"]:
@@ -254,19 +279,16 @@ class LEHRecordProgram:
             if field in self.averages and self.averages[field].winfo_exists():
                 saved_values[f"{field}_avg"] = self.averages[field].cget("text")
 
-        # 清空現有欄位（保留標題行）
         for widget in self.leh_frame.grid_slaves():
             if int(widget.grid_info()["row"]) > 0:
                 widget.grid_forget()
 
-        # 重新渲染欄位並恢復值
         self.entries = {k: v for k, v in self.entries.items() if not any(k.startswith(f) for f in self.leh_field_order)}
         self.averages = {k: v for k, v in self.averages.items() if not any(k.startswith(f) for f in self.leh_field_order)}
         self.row_map.clear()
 
         for i, field in enumerate(self.leh_field_order, 1):
             self.add_leh_field(field, i)
-            # 恢復值
             for suffix in ["1", "2", "3", " LEH Count", " LEH Type", " CEJ Visible", " Photo ID"]:
                 key = f"{field}{suffix}"
                 if key in saved_values and key in self.entries:
@@ -311,19 +333,15 @@ class LEHRecordProgram:
         unique_label = f"{label}_{suffix}"
         self.additional_leh_fields.append(unique_label)
         self.all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
-        
-        # 在 leh_field_order 中插入新欄位到原始欄位後
-        insert_index = self.leh_field_order.index(label) + 1
-        self.leh_field_order.insert(insert_index, unique_label)
-        
-        print(f"Adding {unique_label}, current row_map: {self.row_map}")
-        
-        # 重新渲染所有欄位並保留值
+
+        # 找到最後一個同名欄位，插入其後
+        last_index = max(i for i, f in enumerate(self.leh_field_order) if f.startswith(label))
+        self.leh_field_order.insert(last_index + 1, unique_label)
+
         self.render_leh_fields()
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.entries[f"{unique_label}1"].focus_set()
-        print(f"After adding {unique_label}, updated row_map: {self.row_map}")
 
     def create_other_section(self):
         self.other_frame = ttk.LabelFrame(self.other_photo_frame, text="Other Information", padding=10)
@@ -401,6 +419,7 @@ class LEHRecordProgram:
         entry.bind("<KeyRelease>", lambda e, f=field: self.calculate_avg(f))
         entry.bind("<KeyPress>", lambda e, f=field: self.calculate_avg(f))
         entry.bind("<Key>", lambda e, ent=entry, f=field: self.handle_decimal_input(e, ent, f))
+        entry.bind("<KeyPress>", self.validate_numeric_input)
 
     def create_buttons(self):
         save_button = ttk.Button(self.button_frame, text="Save", command=self.save_and_clear)
@@ -415,8 +434,6 @@ class LEHRecordProgram:
         new_button.pack(side="left", padx=5)
         export_button = ttk.Button(self.button_frame, text="Export CSV", command=self.export_csv)
         export_button.pack(side="left", padx=5)
-        view_cache_button = ttk.Button(self.button_frame, text="View Cache", command=self.view_cache)
-        view_cache_button.pack(side="left", padx=5)
 
     def setup_menu(self):
         menu_bar = tk.Menu(self.root)
@@ -456,6 +473,14 @@ class LEHRecordProgram:
             self.calculate_avg(unique_label)
             return "break"
         return None
+
+    def validate_numeric_input(self, event):
+        allowed_keys = ("BackSpace", "Tab", "Left", "Right", "Delete", "KP_Decimal", "Return")
+        if event.keysym in allowed_keys:
+            return
+        if event.char.isdigit() or event.char in (".", "。"):
+            return
+        return "break"
 
     def handle_arrow_key(self, event, current_widget):
         if not isinstance(current_widget, tk.Entry):
@@ -502,6 +527,7 @@ class LEHRecordProgram:
     def save_and_clear(self):
         self.root.focus_set()
         if not self.current_file:
+            messagebox.showerror("錯誤", "未選擇檔案！")
             self.status_label.config(text="No file selected!")
             return
         data = self.collect_data()
@@ -520,125 +546,299 @@ class LEHRecordProgram:
 
     def export_csv(self):
         if not self.current_file:
+            messagebox.showerror("錯誤", "未選擇檔案！")
             self.status_label.config(text="No file selected!")
             return
-        if self.save_to_file():
-            self.status_label.config(text=f"Exported to {os.path.basename(self.current_file)}")
-        else:
-            self.status_label.config(text="Failed to export file! Check logs for details.")
+        try:
+            # 確保匯出最新資料
+            self.all_data = self.records.copy()
+            success = self.save_to_file()
+            if success:
+                self.save_metadata()
+                self.status_label.config(text=f"Exported to {os.path.basename(self.current_file)}")
+            else:
+                messagebox.showerror("錯誤", "匯出檔案失敗！請檢查日誌。")
+                self.status_label.config(text="Failed to export file! Check logs for details.")
+        except Exception as e:
+            messagebox.showerror("錯誤", f"匯出過程發生錯誤：{str(e)}")
+            self.status_label.config(text=f"Export error: {str(e)}")
 
     def update_treeview(self):
         self.tree.delete(*self.tree.get_children())
-        records_by_num = {}
-        for row in self.records:
-            record_num = row["Record Number"]
-            if record_num not in records_by_num:
-                records_by_num[record_num] = row
-        for record_num, row in records_by_num.items():
-            sample_id = row["Sample ID"]
-            tooth_type = row["Tooth Type"]
-            self.tree.insert("", "end", values=(record_num, sample_id, tooth_type))
+
+        for rec in self.records:
+            uuid_str = rec.get("uuid", "")
+            record_num = rec.get("record_id", "")
+            basic_info = rec.get("basic_info", {})
+            sample_id = basic_info.get("Sample ID", "N/A")
+            tooth_type = basic_info.get("Tooth Type", "N/A")
+            snapshot_filename = f"{uuid_str}.json"
+            # 顯示record_number數字，隱藏完整快照檔名
+            self.tree.insert("", "end", values=(record_num, sample_id, tooth_type, snapshot_filename))
+
+        # 設定Treeview只顯示前三欄
+        self.tree["displaycolumns"] = (0, 1, 2)
+
+        print(f"Treeview updated. Total nested records: {len(self.records)}")
 
     def collect_data(self):
-        base_data = {label: self.entries[label].get() for label in self.basic_fields}
-        sample_id = base_data["Sample ID"]
-        tooth_type = base_data["Tooth Type"]
+        basic_info = {label: self.entries[label].get() for label in self.basic_fields}
+        sample_id = basic_info.get("Sample ID", "")
+        tooth_type = basic_info.get("Tooth Type", "")
         if not sample_id or not tooth_type:
+            messagebox.showerror("錯誤", "Sample ID 與 Tooth Type 為必填欄位！")
             self.status_label.config(text="Sample ID and Tooth Type are required!")
             return None
-        measurement_data = {}
+
+        measurements = {}
         for field in self.measurement_fields:
             short_field = self.get_short_label(field)
-            for i in ["1", "2", "3"]:
-                key = f"{field}{i}"
-                measurement_data[f"{short_field}{i}"] = self.entries[key].get()
-        other_data = {field: self.entries[field].get("1.0", tk.END).strip() for field in self.other_fields}
-        photo_data = {}
+            measurements[short_field] = [
+                self.entries[f"{field}1"].get(),
+                self.entries[f"{field}2"].get(),
+                self.entries[f"{field}3"].get()
+            ]
+
+        other_info = {field: self.entries[field].get("1.0", tk.END).strip() for field in self.other_fields}
+
+        photos = []
         for label in self.fixed_photo_types:
-            photo_data[f"Image ID ({label})"] = self.entries[f"Image ID ({label})"].get()
+            photos.append({
+                "type": label,
+                "image_id": self.entries[f"Image ID ({label})"].get()
+            })
         for label in self.additional_photo_fields:
-            type_val = self.entries[f"{label}_type"].get().strip()
-            image_val = self.entries[label].get().strip()
-            photo_data[f"{label}_type"] = type_val
-            photo_data[label] = image_val
-        leh_rows = []
+            photos.append({
+                "type": self.entries.get(f"{label}_type", tk.Entry()).get(),
+                "image_id": self.entries[label].get()
+            })
+
+        leh_list = []
         all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
-        common_data = {**base_data, **measurement_data, **other_data, **photo_data}
         for field in all_leh_fields:
             val1 = self.entries[f"{field}1"].get()
             val2 = self.entries[f"{field}2"].get()
             val3 = self.entries[f"{field}3"].get()
             if val1 or val2 or val3:
-                row_data = common_data.copy()
-                row_data.update({
-                    "LEH Side": self.get_short_label(field),
-                    "Value 1": val1,
-                    "Value 2": val2,
-                    "Value 3": val3,
-                    "LEH Count": self.entries[f"{field} LEH Count"].get(),
-                    "LEH Type": self.entries[f"{field} LEH Type"].get(),
-                    "CEJ Visible": self.entries[f"{field} CEJ Visible"].get(),
-                    "Photo ID": self.entries[f"{field} Photo ID"].get()
+                try:
+                    values = [float(v) for v in [val1, val2, val3] if v]
+                    avg = sum(values) / len(values) if values else ""
+                except:
+                    avg = ""
+                leh_list.append({
+                    "id": field,  # 唯一ID
+                    "leh_side": self.get_short_label(field),
+                    "values": [val1, val2, val3],
+                    "avg": f"{avg:.2f}" if avg != "" else "",
+                    "count": self.entries[f"{field} LEH Count"].get(),
+                    "type": self.entries[f"{field} LEH Type"].get(),
+                    "cej_visible": self.entries[f"{field} CEJ Visible"].get(),
+                    "photo_id": self.entries[f"{field} Photo ID"].get()
                 })
-                values = [float(v) for v in [val1, val2, val3] if v]
-                row_data["Avg"] = f"{sum(values) / len(values):.2f}" if values else ""
-                leh_rows.append(row_data)
-        return {"base_data": base_data, "leh_rows": leh_rows}
+
+        import re
+        sample_id_str = basic_info.get("Sample ID", "").replace(" ", "_")
+        # 移除特殊字元，僅保留字母數字底線
+        sample_id_str = re.sub(r'[^\w]', '_', sample_id_str)
+        uuid_str = f"R{self.record_number}_S{self.sample_number}_{sample_id_str}"
+        record = {
+            "uuid": uuid_str,
+            "record_id": self.record_number,
+            "sample_number": self.sample_number,
+            "basic_info": basic_info,
+            "measurements": measurements,
+            "other_info": other_info,
+            "photos": photos,
+            "leh_list": leh_list,
+            "leh_fields": self.initial_leh_fields + self.additional_leh_fields,
+            "photo_fields": self.fixed_photo_types + self.additional_photo_fields
+        }
+        return record
 
     def save_data(self, data, is_update=False, new_record=False):
-        base_data = data["base_data"]
-        leh_rows = data["leh_rows"]
-        if new_record:
-            self.record_number += 1
-        record_num = self.records[self.current_record_index]["Record Number"] if is_update else str(self.record_number)
-        if is_update:
-            self.records = [r for r in self.records if r["Record Number"] != record_num]
-        
-        record_data = []
-        common_data = base_data.copy()
-        measurement_data = {f"{self.get_short_label(field)}{i}": self.entries[f"{field}{i}"].get() 
-                            for field in self.measurement_fields for i in ["1", "2", "3"]}
-        common_data.update(measurement_data)
-        other_data = {field: self.entries[field].get("1.0", tk.END).strip() for field in self.other_fields}
-        photo_data = {f"Image ID ({label})": self.entries[f"Image ID ({label})"].get() for label in self.fixed_photo_types}
-        photo_data.update({field: self.entries[field].get() for field in self.additional_photo_fields})
-        photo_data.update({f"{field}_type": self.entries[f"{field}_type"].get() for field in self.additional_photo_fields})
-        common_data.update(other_data)
-        common_data.update(photo_data)
-        if not leh_rows:
-            row_data = {"Record Number": record_num, "LEH Side": "", "Value 1": "", "Value 2": "", "Value 3": "",
-                        "Avg": "", "LEH Count": "", "LEH Type": "", "CEJ Visible": "", "Photo ID": ""}
-            row_data.update(common_data)
-            record_data.append(row_data)
+        # 先用當前record_number生成uuid
+        sample_id_str = data.get("basic_info", {}).get("Sample ID", "").replace(" ", "_")
+        uuid_str = f"R{self.record_number}_S{self.sample_number}_{sample_id_str}"
+        snapshot_filename = f"{uuid_str}.json"
+        data["uuid"] = uuid_str
+        data["record_id"] = self.record_number
+
+        record = data
+
+        # 保存快照
+        try:
+            import os, json
+            snapshot_dir = os.path.join(self.data_dir if self.data_dir else ".", "snapshots")
+            os.makedirs(snapshot_dir, exist_ok=True)
+            snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
+            snapshot_path = os.path.abspath(snapshot_path)
+            with open(snapshot_path, "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+            print(f"Saved snapshot: {snapshot_path}")
+
+            # 檢查快照是否存在
+            if not os.path.exists(snapshot_path):
+                print(f"ERROR: Snapshot file not found after save: {snapshot_path}")
+            else:
+                print(f"Snapshot file confirmed: {snapshot_path}")
+
+            # 更新索引檔
+            index_path = os.path.join(snapshot_dir, "index.json")
+            if os.path.exists(index_path):
+                with open(index_path, "r", encoding="utf-8") as f:
+                    index_list = json.load(f)
+            else:
+                index_list = []
+            # 新增索引
+            index_list.append({
+                "uuid": uuid_str,
+                "snapshot_file": snapshot_path,
+                "record_number": record.get("record_id", ""),
+                "sample_number": record.get("sample_number", ""),
+                "sample_id": record.get("basic_info", {}).get("Sample ID", ""),
+                "tooth_type": record.get("basic_info", {}).get("Tooth Type", ""),
+                "timestamp": datetime.now().isoformat()
+            })
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump(index_list, f, ensure_ascii=False, indent=2)
+            print(f"Updated index: {index_path}")
+
+        except Exception as e:
+            print(f"Failed to save snapshot or index: {e}")
+
+        except Exception as e:
+            print(f"Failed to save snapshot or index: {e}")
+
+        if is_update and self.current_record_index >= 0:
+            # 更新現有紀錄
+            self.records[self.current_record_index] = record
         else:
-            for row in leh_rows:
-                row_data = row.copy()
-                row_data["Record Number"] = record_num
-                row_data.update(common_data)
-                record_data.append(row_data)
-        
-        self.records.extend(record_data)
-        print(f"Saved record: {record_num}, Total records: {len(self.records)}")
+            # 新增新紀錄
+            self.records.append(record)
+            self.record_order.append(snapshot_filename)
+
+        # 儲存完後再自增record_number
+        self.record_number += 1
+
+        print(f"Saved nested record: {uuid_str}, Total records: {len(self.records)}, Next record number: {self.record_number}")
 
     def save_to_file(self):
         try:
             if not self.current_file or not os.path.isdir(os.path.dirname(self.current_file)):
                 raise ValueError("Invalid file path or directory")
-            fieldnames = ["Record Number"] + self.basic_fields + \
-                         [self.get_short_label(field) + i for field in self.measurement_fields for i in ["1", "2", "3"]] + \
+
+            fieldnames = ["Record ID"] + self.basic_fields + \
+                         [self.get_short_label(f) + i for f in self.measurement_fields for i in ["1", "2", "3"]] + \
                          ["LEH Side", "Value 1", "Value 2", "Value 3", "Avg", "LEH Count", "LEH Type", "CEJ Visible", "Photo ID"] + \
-                         self.other_fields + \
-                         [f"Image ID ({label})" for label in self.fixed_photo_types] + \
-                         [field for field in self.additional_photo_fields] + \
-                         [f"{field}_type" for field in self.additional_photo_fields]
+                         self.other_fields + ["Photo Type", "Photo ID"]
+
             with open(self.current_file, "w", newline="", encoding="utf-8") as file:
                 writer = csv.DictWriter(file, fieldnames=fieldnames)
                 writer.writeheader()
-                writer.writerows(self.all_data)
+
+                for rec in self.records:
+                    base_row = {
+                        "Record ID": rec.get("record_id", ""),
+                    }
+                    # 基本資訊
+                    base_row.update(rec.get("basic_info", {}))
+
+                    # 測量
+                    for key, vals in rec.get("measurements", {}).items():
+                        for idx, val in enumerate(vals, 1):
+                            base_row[f"{key}{idx}"] = val
+
+                    # 其他資訊
+                    base_row.update(rec.get("other_info", {}))
+
+                    # 照片
+                    photos = rec.get("photos", [])
+                    photo_map = {}
+                    for p in photos:
+                        photo_map[p.get("type", "")] = p.get("image_id", "")
+
+                    # 若無LEH，輸出一行
+                    leh_list = rec.get("leh_list", [])
+                    if not leh_list:
+                        row = base_row.copy()
+                        row.update({
+                            "LEH Side": "",
+                            "Value 1": "",
+                            "Value 2": "",
+                            "Value 3": "",
+                            "Avg": "",
+                            "LEH Count": "",
+                            "LEH Type": "",
+                            "CEJ Visible": "",
+                            "Photo ID": ""
+                        })
+                        # 只輸出第一張照片
+                        if photos:
+                            row["Photo Type"] = photos[0].get("type", "")
+                            row["Photo ID"] = photos[0].get("image_id", "")
+                        writer.writerow(row)
+                    else:
+                        for leh in leh_list:
+                            row = base_row.copy()
+                            row.update({
+                                "LEH Side": leh.get("leh_side", ""),
+                                "Value 1": leh.get("values", ["", "", ""])[0],
+                                "Value 2": leh.get("values", ["", "", ""])[1],
+                                "Value 3": leh.get("values", ["", "", ""])[2],
+                                "Avg": leh.get("avg", ""),
+                                "LEH Count": leh.get("count", ""),
+                                "LEH Type": leh.get("type", ""),
+                                "CEJ Visible": leh.get("cej_visible", ""),
+                                "Photo ID": leh.get("photo_id", "")
+                            })
+                            # 只輸出第一張照片
+                            if photos:
+                                row["Photo Type"] = photos[0].get("type", "")
+                                row["Photo ID"] = photos[0].get("image_id", "")
+                            writer.writerow(row)
             return True
         except Exception as e:
             self.status_label.config(text=f"Error exporting file: {str(e)}")
             return False
+
+    def save_metadata(self):
+        if not self.data_dir:
+            return
+        metadata_dir = os.path.join(self.data_dir, "metadata")
+        os.makedirs(metadata_dir, exist_ok=True)
+        metadata_file = os.path.join(metadata_dir, "metadata.pkl")
+        metadata = {
+            "records": self.records,
+            "record_order": self.record_order,
+            "record_number": self.record_number,
+            "context_fields": self.context_fields
+        }
+        try:
+            with open(metadata_file, "wb") as f:
+                pickle.dump(metadata, f)
+            print(f"Metadata saved to {metadata_file}")
+            print(f"Saved records: {len(self.records)}, Fields in first record: {self.records[0].keys() if self.records else 'No records'}")
+        except Exception as e:
+            print(f"Failed to save metadata: {e}")
+
+    def load_metadata(self):
+        if not self.data_dir:
+            return
+        metadata_file = os.path.join(self.data_dir, "metadata", "metadata.pkl")
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, "rb") as f:
+                    metadata = pickle.load(f)
+                    self.records = metadata["records"]
+                    self.record_order = metadata["record_order"]
+                    self.record_number = metadata["record_number"]
+                    self.context_fields = metadata.get("context_fields", [])
+                    self.basic_fields = self.LABELS[:1] + self.context_fields + self.LABELS[2:9]
+                    self.all_data = self.records.copy()
+                print(f"Metadata loaded from {metadata_file}")
+                print(f"Loaded records: {len(self.records)}, Fields in first record: {self.records[0].keys() if self.records else 'No records'}")
+            except Exception as e:
+                print(f"Failed to load metadata: {e}")
 
     def clear_entries(self, preserve_fields=None):
         if preserve_fields is None:
@@ -654,13 +854,6 @@ class LEHRecordProgram:
                 avg_label.config(text="N/A")
 
     def reset_leh_fields(self):
-        for field in self.additional_leh_fields[:]:
-            if field in self.row_map:
-                del self.row_map[field]
-            if field in self.entries:
-                del self.entries[field]
-            if field in self.averages:
-                del self.averages[field]
         self.additional_leh_fields = []
         self.all_leh_fields = self.initial_leh_fields.copy()
         self.leh_field_order = self.initial_leh_fields.copy()
@@ -682,6 +875,7 @@ class LEHRecordProgram:
         self.all_photo_fields = self.fixed_photo_types.copy()
         for i, type_name in enumerate(self.fixed_photo_types, 1):
             self.photo_row_map[f"Image ID ({type_name})"] = i
+        self.add_photo_id_field(4)
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
@@ -692,20 +886,24 @@ class LEHRecordProgram:
         self.current_file = file_path
         self.data_dir = os.path.dirname(file_path)
         self.load_existing_file()
-        context_file = os.path.join(self.data_dir, "context_config.pkl")
-        if os.path.exists(context_file):
-            with open(context_file, 'rb') as f:
-                self.context_fields = pickle.load(f)
-                self.basic_fields = self.LABELS[:1] + self.context_fields + self.LABELS[2:9]
+        self.load_metadata()
+        self.update_treeview()
 
     def load_existing_file(self):
         try:
             with open(self.current_file, "r", encoding="utf-8") as file:
                 reader = csv.DictReader(file)
                 self.all_data = list(reader)
-                self.records = self.all_data.copy()
-                self.record_number = max([int(row["Record Number"]) for row in self.records if row["Record Number"].isdigit()], default=0) + 1
-            self.update_treeview()
+                for row in self.all_data:
+                    if "Field Mapping" not in row:
+                        row["Field Mapping"] = {"LEH": self.initial_leh_fields, "Photo": self.fixed_photo_types}
+                if not self.records:
+                    self.records = self.all_data.copy()
+                    if self.records:
+                        self.record_number = max([int(row["Record Number"]) for row in self.records if row["Record Number"].isdigit()], default=0) + 1
+                    else:
+                        self.record_number = 1
+                    self.record_order = [row["Record Number"] for row in self.records if row["Record Number"] not in self.record_order]
             self.status_label.config(text=f"Loaded file: {os.path.basename(self.current_file)}")
         except Exception as e:
             self.status_label.config(text=f"Error loading file: {str(e)}")
@@ -717,8 +915,7 @@ class LEHRecordProgram:
             self.data_dir = os.path.dirname(file_path)
             self.all_data = self.records.copy()
             self.save_to_file()
-            with open(os.path.join(self.data_dir, "context_config.pkl"), 'wb') as f:
-                pickle.dump(self.context_fields, f)
+            self.save_metadata()
             self.status_label.config(text=f"Saved as {os.path.basename(self.current_file)}")
 
     def show_record(self, event=None):
@@ -726,80 +923,147 @@ class LEHRecordProgram:
         if not selection:
             return
         item = selection[0]
-        self.current_record_index = self.tree.index(item)
-        selected_record_num = self.tree.item(item)["values"][0]
-        record_data = [row for row in self.records if row["Record Number"] == str(selected_record_num)]
-        print(f"Showing record {selected_record_num}, data: {record_data}")
-        if not record_data:
+        values = self.tree.item(item)["values"]
+        print(f"[DEBUG] Treeview values: {values}")
+        if len(values) < 4:
+            self.status_label.config(text="Snapshot filename missing")
             return
-        
-        self.reset_leh_fields()
-        self.reset_photo_fields()
+        snapshot_filename = values[3]
+        print(f"[DEBUG] Snapshot filename from Treeview: {snapshot_filename}")
+
+        # 載入對應快照
+        try:
+            import os, json
+            snapshot_dir = os.path.join(self.data_dir if self.data_dir else ".", "snapshots")
+            snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
+            print(f"[DEBUG] Snapshot full path: {snapshot_path}")
+            print(f"[DEBUG] Snapshot exists? {os.path.exists(snapshot_path)}")
+            if not os.path.exists(snapshot_path):
+                self.status_label.config(text="Snapshot not found")
+                return
+            with open(snapshot_path, "r", encoding="utf-8") as f:
+                target_record = json.load(f)
+            print(f"Loaded snapshot: {snapshot_path}")
+        except Exception as e:
+            self.status_label.config(text=f"Failed to load snapshot: {e}")
+            return
+
+        print(f"Showing nested record {snapshot_filename}")
+
         self.clear_entries()
-        
-        first_row = record_data[0]
-        for field in self.basic_fields + self.other_fields:
-            if field in first_row and first_row[field]:
-                if isinstance(self.entries[field], tk.Text):
-                    self.entries[field].insert("1.0", first_row[field])
-                else:
-                    self.entries[field].insert(0, first_row[field])
-        
-        for field in self.measurement_fields:
-            short_field = self.get_short_label(field)
-            for i in ["1", "2", "3"]:
-                key = f"{short_field}{i}"
-                if key in first_row and first_row[key]:
-                    self.entries[f"{field}{i}"].insert(0, first_row[key])
-            self.calculate_avg(field)
-        
-        for label in self.fixed_photo_types:
-            key = f"Image ID ({label})"
-            if key in first_row and first_row[key]:
-                self.entries[key].insert(0, first_row[key])
-        
-        dynamic_photos_added = set()
-        for field in first_row:
-            if field.startswith("Image ID (add") and field.endswith("_type"):
-                base_field = field[:-5]
-                if base_field not in self.all_photo_fields and base_field not in dynamic_photos_added:
-                    self.add_new_photo_id_field(self.photo_row_map[self.all_photo_fields[-1]])
-                    dynamic_photos_added.add(base_field)
-                if first_row[field]:
-                    self.entries[field].insert(0, first_row[field])
-                if base_field in first_row and first_row[base_field]:
-                    self.entries[base_field].insert(0, first_row[base_field])
-        
-        dynamic_leh_added = set()
-        for row in record_data:
-            leh_side = row.get("LEH Side", "")
-            if not leh_side:
+
+        # 刪除所有LEH動態欄位元件
+        for widget in self.leh_frame.grid_slaves():
+            if int(widget.grid_info().get("row", 0)) > 0:
+                widget.destroy()
+        self.additional_leh_fields = []
+        self.all_leh_fields = self.initial_leh_fields.copy()
+        self.leh_field_order = self.initial_leh_fields.copy()
+
+        # 根據快照中的leh_fields重建欄位順序
+        leh_fields = target_record.get("leh_fields", self.initial_leh_fields.copy())
+        self.all_leh_fields = leh_fields.copy()
+        self.leh_field_order = leh_fields.copy()
+        self.additional_leh_fields = [f for f in leh_fields if f not in self.initial_leh_fields]
+
+        # 重新渲染LEH欄位
+        self.render_leh_fields()
+
+        # 刪除所有Photo動態欄位元件
+        for widget in self.photo_frame.grid_slaves():
+            if int(widget.grid_info().get("row", 0)) > len(self.fixed_photo_types):
+                widget.destroy()
+        self.additional_photo_fields = []
+        self.all_photo_fields = self.fixed_photo_types.copy()
+
+        # 重新渲染初始欄位
+        self.render_leh_fields()
+        self.add_photo_id_field(len(self.fixed_photo_types) + 1)
+
+
+        # 基本資訊
+        basic_info = target_record.get("basic_info", {})
+        for field in self.basic_fields:
+            if field in basic_info:
+                self.entries[field].insert(0, basic_info[field])
+
+        # 測量
+        measurements = target_record.get("measurements", {})
+        for key, vals in measurements.items():
+            for idx, val in enumerate(vals, 1):
+                entry_key = None
+                for f in self.measurement_fields:
+                    if self.get_short_label(f) == key:
+                        entry_key = f"{f}{idx}"
+                        break
+                if entry_key and entry_key in self.entries:
+                    self.entries[entry_key].insert(0, val)
+            # 計算平均
+            for f in self.measurement_fields:
+                if self.get_short_label(f) == key:
+                    self.calculate_avg(f)
+
+        # 其他資訊
+        other_info = target_record.get("other_info", {})
+        for field in self.other_fields:
+            if field in other_info:
+                self.entries[field].insert("1.0", other_info[field])
+
+        # 照片
+        photos = target_record.get("photos", [])
+        for p in photos:
+            ptype = p.get("type", "")
+            pid = p.get("image_id", "")
+            for key in self.entries:
+                if key.endswith("_type") and self.entries[key].winfo_exists():
+                    continue
+                if key.endswith("_type") or key.endswith("_id"):
+                    continue
+            if f"Image ID ({ptype})" in self.entries:
+                self.entries[f"Image ID ({ptype})"].insert(0, pid)
+            if f"Image ID ({ptype})_type" in self.entries:
+                self.entries[f"Image ID ({ptype})_type"].insert(0, ptype)
+
+        # LEH
+        leh_list = target_record.get("leh_list", [])
+        for leh in leh_list:
+            leh_id = leh.get("id", "")
+            # 找對應欄位
+            if leh_id not in self.all_leh_fields:
+                # 動態新增
+                base_label = leh.get("leh_side", "")
+                suffix_num = len([f for f in self.additional_leh_fields if f.startswith(base_label)]) + 1
+                unique_label = f"{base_label}_{suffix_num}"
+                self.additional_leh_fields.append(unique_label)
+                self.all_leh_fields.append(unique_label)
+                self.leh_field_order.append(unique_label)
+                self.render_leh_fields()
+            # 重新整理欄位
+            self.all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
+
+        # 重新渲染
+        self.render_leh_fields()
+
+        # 填入LEH資料
+        for leh in leh_list:
+            leh_id = leh.get("id", "")
+            full_label = leh_id if leh_id in self.all_leh_fields else None
+            if not full_label:
                 continue
-            full_label = None
-            if "_" in leh_side:
-                base_label, suffix = leh_side.rsplit("_", 1)
-                full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == base_label), None)
-                if full_label and f"{full_label}_{suffix}" not in self.all_leh_fields and f"{full_label}_{suffix}" not in dynamic_leh_added:
-                    self.add_new_leh_field(full_label)
-                    dynamic_leh_added.add(f"{full_label}_{suffix}")
-                    full_label = f"{full_label}_{suffix}"
-            else:
-                full_label = next((f for f in self.initial_leh_fields if self.get_short_label(f) == leh_side), None)
-            
-            if full_label:
-                for i in ["1", "2", "3"]:
-                    key = f"Value {i}"
-                    if key in row and row[key]:
-                        self.entries[f"{full_label}{i}"].insert(0, row[key])
-                for field_type in ["LEH Count", "LEH Type", "CEJ Visible", "Photo ID"]:
-                    key = f"{full_label} {field_type}"
-                    if field_type in row and row[field_type]:
-                        self.entries[key].insert(0, row[field_type])
-                self.calculate_avg(full_label)
-        
+            vals = leh.get("values", ["", "", ""])
+            for idx, val in enumerate(vals, 1):
+                key = f"{full_label}{idx}"
+                if key in self.entries:
+                    self.entries[key].insert(0, val)
+            self.averages[full_label].config(text=leh.get("avg", "N/A"))
+            for suffix, k in [(" LEH Count", "count"), (" LEH Type", "type"), (" CEJ Visible", "cej_visible"), (" Photo ID", "photo_id")]:
+                key = f"{full_label}{suffix}"
+                if key in self.entries:
+                    self.entries[key].insert(0, leh.get(k, ""))
+
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self.status_label.config(text=f"Showing record {selected_record_num}")
+        self.status_label.config(text=f"Showing record {record_id}")
 
     def show_previous_record(self):
         if self.current_record_index > 0:
@@ -818,13 +1082,13 @@ class LEHRecordProgram:
         saved_photo_types = {f"{field}_type": self.entries[f"{field}_type"].get() for field in self.additional_photo_fields}
         self.clear_entries()
         for field, value in saved_basic_data.items():
-            if value and field in self.entries and self.entries[field].winfo_exists():
+            if value and field in self.entries:
                 self.entries[field].insert(0, value)
         for field, value in saved_photo_data.items():
-            if value and field in self.entries and self.entries[field].winfo_exists():
+            if value and field in self.entries:
                 self.entries[field].insert(0, value)
         for field, value in saved_photo_types.items():
-            if value and field in self.entries and self.entries[field].winfo_exists():
+            if value and field in self.entries:
                 self.entries[field].insert(0, value)
         self.reset_leh_fields()
         self.current_record_index = -1
@@ -853,56 +1117,6 @@ class LEHRecordProgram:
         self.reset_leh_fields()
         self.reset_photo_fields()
         self.status_label.config(text="Started new record")
-
-    def view_cache(self):
-        cache_window = tk.Toplevel(self.root)
-        cache_window.title("Cached Records")
-        cache_window.geometry("600x400")
-        cache_window.transient(self.root)
-        cache_window.grab_set()
-
-        tree = ttk.Treeview(cache_window, columns=("Record", "Sample ID", "Tooth Type"), show="headings")
-        tree.heading("Record", text="Record Number")
-        tree.heading("Sample ID", text="Sample ID")
-        tree.heading("Tooth Type", text="Tooth Type")
-        tree.column("Record", width=100)
-        tree.column("Sample ID", width=200)
-        tree.column("Tooth Type", width=200)
-        tree.pack(fill="both", expand=True, padx=10, pady=10)
-
-        scrollbar = ttk.Scrollbar(cache_window, orient="vertical", command=tree.yview)
-        scrollbar.pack(side="right", fill="y")
-        tree.configure(yscrollcommand=scrollbar.set)
-
-        for record_num, data in self.record_cache.items():
-            sample_id = data.get("Sample ID", "")
-            tooth_type = data.get("Tooth Type", "")
-            tree.insert("", "end", values=(record_num, sample_id, tooth_type))
-
-        def show_cached_record(event):
-            selection = tree.selection()
-            if not selection:
-                return
-            item = tree.item(selection[0])
-            record_num = item["values"][0]
-            cached_data = self.record_cache.get(str(record_num))
-            if cached_data:
-                self.reset_leh_fields()
-                self.reset_photo_fields()
-                self.clear_entries()
-                for field, value in cached_data.items():
-                    if field in self.entries and value and self.entries[field].winfo_exists():
-                        if isinstance(self.entries[field], tk.Text):
-                            self.entries[field].insert("1.0", value)
-                        else:
-                            self.entries[field].insert(0, value)
-                        if field.endswith(("1", "2", "3")) and field[:-1] in self.averages:
-                            self.calculate_avg(field[:-1])
-                self.canvas.update_idletasks()
-                self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-        tree.bind("<Double-1>", show_cached_record)
-        tk.Button(cache_window, text="Close", command=cache_window.destroy).pack(pady=5)
 
 if __name__ == "__main__":
     app = LEHRecordProgram()
