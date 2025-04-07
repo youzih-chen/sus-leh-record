@@ -641,6 +641,18 @@ class LEHRecordProgram:
         # 移除特殊字元，僅保留字母數字底線
         sample_id_str = re.sub(r'[^\w]', '_', sample_id_str)
         uuid_str = f"R{self.record_number}_S{self.sample_number}_{sample_id_str}"
+        # 生成正確順序的leh_fields
+        ordered_leh_fields = self.initial_leh_fields.copy()
+        for add_field in self.additional_leh_fields:
+            base_label = add_field.split("_")[0]
+            # 找最後一個同名欄位
+            last_idx = -1
+            for idx, f in enumerate(ordered_leh_fields):
+                if f.startswith(base_label):
+                    last_idx = idx
+            insert_pos = last_idx + 1
+            ordered_leh_fields.insert(insert_pos, add_field)
+
         record = {
             "uuid": uuid_str,
             "record_id": self.record_number,
@@ -650,7 +662,7 @@ class LEHRecordProgram:
             "other_info": other_info,
             "photos": photos,
             "leh_list": leh_list,
-            "leh_fields": self.initial_leh_fields + self.additional_leh_fields,
+            "leh_fields": ordered_leh_fields,
             "photo_fields": self.fixed_photo_types + self.additional_photo_fields
         }
         return record
