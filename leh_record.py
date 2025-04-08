@@ -602,16 +602,16 @@ class LEHRecordProgram:
         other_info = {field: self.entries[field].get("1.0", tk.END).strip() for field in self.other_fields}
 
         photos = []
-        for label in self.fixed_photo_types:
-            photos.append({
-                "type": label,
-                "image_id": self.entries[f"Image ID ({label})"].get()
-            })
-        for label in self.additional_photo_fields:
-            photos.append({
-                "type": self.entries.get(f"{label}_type", tk.Entry()).get(),
-                "image_id": self.entries[label].get()
-            })
+        for key in self.entries:
+            if key.startswith("Image ID (") and not key.endswith("_type)") and not key.endswith("_type"):
+                pid = self.entries[key].get()
+                ptype_key = f"{key}_type"
+                ptype = self.entries.get(ptype_key, tk.Entry()).get() if ptype_key in self.entries else ""
+                photos.append({
+                    "id": key,  # 使用完整欄位名稱
+                    "type": ptype,
+                    "image_id": pid
+                })
 
         leh_list = []
         all_leh_fields = self.initial_leh_fields + self.additional_leh_fields
@@ -653,6 +653,22 @@ class LEHRecordProgram:
             insert_pos = last_idx + 1
             ordered_leh_fields.insert(insert_pos, add_field)
 
+        # 生成完整photo_fields
+        photo_fields_combined = []
+        for key in self.entries:
+            if key.startswith("Image ID (") and not key.endswith("_type)") and not key.endswith("_type"):
+                label = key[10:-1]
+                if label not in photo_fields_combined:
+                    photo_fields_combined.append(label)
+
+        print("[DEBUG] current additional_photo_fields:", self.additional_photo_fields)
+        print("[DEBUG] combined photo_fields:", photo_fields_combined)
+        print("[DEBUG] photos list before save:", photos)
+        print("[DEBUG] basic_info:", basic_info)
+        print("[DEBUG] measurements:", measurements)
+        print("[DEBUG] other_info:", other_info)
+        print("[DEBUG] leh_list:", leh_list)
+
         record = {
             "uuid": uuid_str,
             "record_id": self.record_number,
@@ -663,8 +679,10 @@ class LEHRecordProgram:
             "photos": photos,
             "leh_list": leh_list,
             "leh_fields": ordered_leh_fields,
-            "photo_fields": self.fixed_photo_types + self.additional_photo_fields
+            "photo_fields": photo_fields_combined
         }
+        print("[DEBUG] Saving record photo_fields:", record["photo_fields"])
+        print("[DEBUG] Saving record photos:", record["photos"])
         return record
 
     def save_data(self, data, is_update=False, new_record=False):
@@ -988,9 +1006,38 @@ class LEHRecordProgram:
         self.additional_photo_fields = []
         self.all_photo_fields = self.fixed_photo_types.copy()
 
-        # 重新渲染初始欄位
+        # 根據快照中的photo_fields重建欄位順序
+        photo_fields = target_record.get("photo_fields", self.fixed_photo_types.copy())
+        print("[DEBUG] Loaded photo_fields:", photo_fields)
+        self.all_photo_fields = photo_fields.copy()
+        self.additional_photo_fields = [f for f in photo_fields if f not in self.fixed_photo_types]
+
+        # 刪除所有Photo動態欄位元件
+        for widget in self.photo_frame.grid_slaves():
+            if int(widget.grid_info().get("row", 0)) > len(self.fixed_photo_types):
+                widget.destroy()
+
+        # 重新渲染Photo欄位
+        for i, ptype in enumerate(self.fixed_photo_types, 1):
+            # 固定欄位已存在
+            pass
+        base_row = len(self.fixed_photo_types) + 1
+        for idx, add_field in enumerate(self.additional_photo_fields, base_row):
+            self.add_photo_id_field(idx, add_field.split("add")[1] if "add" in add_field else "")
+
+        # 重新渲染LEH欄位
         self.render_leh_fields()
-        self.add_photo_id_field(len(self.fixed_photo_types) + 1)
+
+        # 填入Photo資料
+        photos = target_record.get("photos", [])
+        for p in photos:
+            pid = p.get("image_id", "")
+            pid_type = p.get("type", "")
+            pid_id = p.get("id", pid_type)
+            if f"Image ID ({pid_id})" in self.entries:
+                self.entries[f"Image ID ({pid_id})"].insert(0, pid)
+            if f"Image ID ({pid_id})_type" in self.entries:
+                self.entries[f"Image ID ({pid_id})_type"].insert(0, pid_type)
 
 
         # 基本資訊
@@ -1075,7 +1122,7 @@ class LEHRecordProgram:
 
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self.status_label.config(text=f"Showing record {record_id}")
+        self.status_label.config(text=f"Showing record {target_record.get('record_id', '')}")
 
     def show_previous_record(self):
         if self.current_record_index > 0:
