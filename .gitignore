@@ -1,0 +1,12 @@
+# Local research data & exports
+*.csv
+*.pkl
+snapshots/
+metadata/
+
+# Python / PyInstaller artifacts
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
