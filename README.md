@@ -44,7 +44,22 @@ python leh_record.py
 
 ### 2. 量測與 LEH 紀錄區（Measurements / LEH Records）
 - 各量測項目皆配置三組輸入欄位，系統將於右側即時計算平均值（輸入全形句號 `。` 將自動轉換為半形小數點 `.`）。
-- 若同一位置包含多筆 LEH 觀察紀錄，可點擊該列右側之 **`+`** 按鈕動態擴充輸入列。
+- **牙齒形態量測欄位（Measurements）**：
+  - **`GL`**（`Greatest Length`）：牙齒最大長度。
+  - **`WA`**（`Anterior Width`）：前齒峰寬度。
+  - **`WM`**（`Middle Width`）：中齒峰寬度。
+  - **`WP`**（`Posterior Width`）：後齒峰寬度。
+  - **`CAL`**（`Anterior Lingual Crown Height`）：前齒峰舌側齒冠高度。
+  - **`CML`**（`Middle Lingual Crown Height`）：中齒峰舌側齒冠高度。
+  - **`CPL`**（`Posterior Lingual Crown Height`）：後齒峰舌側齒冠高度。
+  - **`CAB`**（`Anterior Buccal Crown Height`）：前齒峰頰側齒冠高度。
+  - **`CMB`**（`Middle Buccal Crown Height`）：中齒峰頰側齒冠高度。
+  - **`CPB`**（`Posterior Buccal Crown Height`）：後齒峰頰側齒冠高度。
+- **LEH 高度與屬性欄位（LEH Records）**：
+  - **`La`、`Lb`、`Lc`**（`Lingual Peak a / b / c LEH Height`）：舌側齒峰 a、b、c 之 LEH 高度。
+  - **`Ba`、`Bb`、`Bc`**（`Buccal Peak a / b / c LEH Height`）：頰側齒峰 a、b、c 之 LEH 高度。
+  - **每列附加屬性**：`LEH Count`（LEH 數量）、`LEH Type`（LEH 類型：L線性、D凹陷）、`CEJ Visible`（是否可見CEJ／決定是否能測量）。
+  - 若同一位置包含多筆 LEH 觀察紀錄，可點擊該列右側之 **`+`** 按鈕動態擴充輸入列。
 
 ### 3. 備註與影像編號區（Other Information / Photo）
 - **`Notes`、`Pathology`**：提供自由文字輸入，用於記錄補充說明與病理特徵。
